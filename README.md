@@ -1,4 +1,4 @@
-# TVW camera
+# rock5b-camera
 
 Vandalism-detection camera for a tennis club, on a Radxa Rock 5B: YOLOv10
 person and vehicle detection on the RK3588 NPU, PTZ control of a Foscam dome,
@@ -50,8 +50,8 @@ board, these parts are worth stealing:
 ## Getting it running
 
 ```bash
-git clone <this repo> tvw_surveillance
-cd tvw_surveillance
+git clone <this repo> rock5b-camera
+cd rock5b-camera
 
 cp config.local.example.yaml config.local.yaml   # your camera's address
 cp secrets.example.yaml secrets.yaml             # camera + panel passwords

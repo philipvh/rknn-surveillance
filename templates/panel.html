@@ -46,8 +46,6 @@ button[disabled] { opacity:.35; }
 .spacer { visibility:hidden; }
 h3 { margin:14px 0 6px; font-size:11px; letter-spacing:.14em; text-transform:uppercase;
   color:#6d8378; font-weight:bold; }
-#viewtoggle { position:absolute; right:10px; top:10px; font-size:13px;
-  padding:8px 12px; opacity:.85; }
 /* A switch, because the state is what matters here -- a button labelled with
    the thing it would switch to makes you read it twice to learn where you are. */
 .swrow { display:-webkit-flex; display:flex; -webkit-align-items:center;
@@ -98,9 +96,6 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
   <div id="body">
     <div id="view">
       <img id="live" alt="live view">
-      {% if has_detector %}
-      <button id="viewtoggle" class="on">Camera view</button>
-      {% endif %}
       <div id="msg"></div>
     </div>
     <div id="pad">
@@ -328,33 +323,19 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
     live.src = path + '?t=' + (new Date()).getTime();
   }
 
-  var vt = document.getElementById('viewtoggle');
   var sw = document.getElementById('overlays');
 
-  /* One function owns the state. The switch on the pad and the button over
-     the video are two views of it; letting them drift would leave the panel
-     disagreeing with itself about what is on screen. */
   function setOverlays(on, restart) {
     showDetector = !!on;
     if (sw) {
       sw.className = 'sw' + (showDetector ? ' on' : '');
       sw.setAttribute('aria-checked', showDetector ? 'true' : 'false');
     }
-    if (vt) {
-      /* This one names where tapping takes you, not where you are. */
-      vt.innerHTML = showDetector ? 'Camera view' : 'Detector view';
-      vt.className = showDetector ? 'on' : '';
-    }
     if (restart) startStream();
   }
 
   if (sw) {
     sw.addEventListener('click', function (e) {
-      e.preventDefault(); setOverlays(!showDetector, true);
-    }, false);
-  }
-  if (vt) {
-    vt.addEventListener('click', function (e) {
       e.preventDefault(); setOverlays(!showDetector, true);
     }, false);
   }
