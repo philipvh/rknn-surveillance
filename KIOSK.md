@@ -1,8 +1,13 @@
 # The wall panel (Galaxy Tab S)
 
-The panel is served by the `rknn-surveillance` service itself, at
-`http://<rock5b>:8080/`. Log in with the user in `config.yaml`
-(`web.auth_user`, default `admin`) and the password from `secrets.yaml`.
+The panel is served by the `rknn-surveillance` service itself, on the port in
+`web.port` — **8081** on the club board, because 8080 is forwarded to the
+camera's own interface.
+
+Once `setup_network.sh` has run, the board answers to a name on its own
+segment, so the kiosk URL is **`http://panel:8081/`** rather than an address.
+That name is served by the board's own dnsmasq and keeps working with no
+uplink of any kind, which is the point.
 
 It runs inside the surveillance process on purpose: it then drives the same
 PTZ object as the automatic controller, so every button obeys the same
@@ -11,9 +16,23 @@ camera from the panel that the safety logic does not see.
 
 ## Before anything else
 
-Give the Rock 5B a **fixed address or an mDNS name**. The old code had an IP
-baked into a template and that is exactly the failure not to repeat. A
-bookmark that breaks after a router reboot is a panel nobody uses.
+**Use the name, not an address.** The old code had an IP baked into a template
+and that is exactly the failure not to repeat: a bookmark that breaks after a
+router reboot is a panel nobody uses. `setup_network.sh` makes the board
+answer to `panel` on the segment the tablet is on.
+
+**Decide how it logs in.** Settings → Credentials offers three modes, and for
+a wall tablet the middle one is usually right:
+
+* *Always* — the kiosk browser must store the password.
+* *Not on our own network* — no password from the club's own addresses, one
+  required from anywhere else. The tablet never prompts; a phone on someone's
+  hotspot still cannot get in.
+* *Nobody* — no password at all. Reasonable only if the segment is genuinely
+  closed.
+
+With the middle mode the kiosk needs no stored credentials, which is one less
+thing to break when the password changes.
 
 ## Browser
 
@@ -32,8 +51,8 @@ smoother, at the cost of one ffmpeg process per viewer.
 
 **Fully Kiosk Browser** handles all of this on old Android:
 
-* Start URL `http://<rock5b>:8080/`, and store the credentials so it does not
-  prompt.
+* Start URL `http://panel:8081/`. With the *trusted network* access mode
+  there are no credentials to store.
 * **Start on boot** and **restore on crash**.
 * **Screensaver**: blank the screen after a few minutes, wake on touch. Fully
   Kiosk can also wake on motion from the front camera, which for a panel by
@@ -42,6 +61,12 @@ smoother, at the cost of one ffmpeg process per viewer.
 * Disable pull-down notifications and the address bar.
 
 ## Two things that kill wall-mounted tablets
+
+**A tablet that browses.** Clear it before mounting: sign out of the Google
+account, remove mail and photos, and take everything off the home screen. A
+wall panel by a clubhouse door is a device other people will pick up, and it
+should hold nothing but this one page. Fully Kiosk's own settings then stop
+anyone leaving that page.
 
 **Battery swelling.** An older tablet held at 100% permanently will swell, and
 a swelling battery behind a bracket is a hazard, not an inconvenience. Put the
