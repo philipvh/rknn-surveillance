@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+#wait { max-width:34em; margin:40px auto; text-align:center; color:#8fa39a; }
+#wait h2 { color:#dfe7e1; font-size:20px; font-weight:normal; margin:0 0 10px; }
+#dots { font-family:monospace; font-size:28px; color:#62bb99; height:34px;
+  letter-spacing:.2em; }
+#detail { font-size:13px; line-height:1.6; margin-top:14px; }
+#slow { display:none; color:#e0a64a; font-size:13px; margin-top:14px; }
+#slow.show { display:block; }
+#again { display:inline-block; margin-top:16px; padding:12px 20px;
+  background:#2f6a53; color:#fff; border:1px solid #3f8a6c;
+  text-decoration:none; font-weight:bold; }
+</style>
+
+<div id="wait">
+  <h2>Restarting {{ site_name }}</h2>
+  <div id="dots">&middot;</div>
+  <p id="detail">
+    Any recording in progress is being closed and its clip cut first, so this
+    takes a few seconds longer than a bare restart. The page returns on its
+    own when the camera is back.
+  </p>
+  <p id="slow">
+    Still not back. It may be taking longer than usual to start, or it may
+    have failed &mdash; with ssh to the board:
+    <br><code>sudo systemctl status {{ 'rknn-surveillance' }}</code>
+  </p>
+  <a id="again" href="{{ back }}" style="display:none">Back to settings</a>
+</div>
+
+<script>
+/* ES5 only. */
+(function () {
+  var dots = document.getElementById('dots');
+  var slow = document.getElementById('slow');
+  var again = document.getElementById('again');
+  var n = 0, tries = 0, wentAway = false;
+
+  function tick() {
+    n = (n + 1) % 4;
+    var s = '';
+    for (var i = 0; i < n + 1; i++) s += '·';
+    dots.innerHTML = s;
+  }
+  setInterval(tick, 400);
+
+  /* healthz is the one route that needs no password, which is exactly what
+     makes it usable here: the browser may be holding credentials that the
+     restart is about to change. */
+  function poll() {
+    tries++;
+    if (tries > 90) {                    /* about three minutes */
+      slow.className = 'show';
+      again.style.display = 'inline-block';
+      return;
+    }
+    var x = new XMLHttpRequest();
+    x.open('GET', '/healthz?t=' + (new Date()).getTime(), true);
+    x.timeout = 1500;
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      if (x.status === 200) {
+        /* Do not declare victory on the process we just asked to die: wait
+           until it has actually gone before believing it came back. */
+        if (wentAway) { window.location.href = {{ back|tojson }}; return; }
+        setTimeout(poll, 500);
+      } else {
+        wentAway = true;
+        setTimeout(poll, 1000);
+      }
+    };
+    x.ontimeout = function () { wentAway = true; setTimeout(poll, 500); };
+    x.onerror = function () { wentAway = true; setTimeout(poll, 1000); };
+    x.send();
+  }
+  setTimeout(poll, 1500);
+
+  if (tries > 30) { slow.className = 'show'; }
+})();
+</script>
+{% endblock %}

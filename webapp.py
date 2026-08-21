@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -425,6 +426,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             raw_yaml=_overrides_yaml(),
             has_overrides=bool(settings is not None
                                and settings.config_overrides),
+            under_systemd=_under_systemd(),
             disk=_disk_report(),
             likely=[], rest=[], active=set(), overridden=False,
             defaults=sorted(cfg.trigger_classes), saved="")
@@ -638,6 +640,38 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                     msg = "saved"
 
         return _settings_page("system", sys_err=err, sys_msg=msg)
+
+    def _under_systemd():
+        """Will something restart us if we exit?
+
+        systemd sets INVOCATION_ID for every unit it starts. Without it we are
+        running from a terminal or run_test.sh, where exiting means staying
+        down -- and offering a restart button that silently stops the camera
+        would be worse than not offering one.
+        """
+        return bool(os.environ.get("INVOCATION_ID"))
+
+    @app.route("/settings/restart", methods=["POST"])
+    @protected
+    def settings_restart():
+        if not _under_systemd():
+            return _settings_page(
+                "system",
+                sys_err="Nothing would start this again: it is not running "
+                        "under systemd. Restart it the way you started it.")
+
+        # SIGTERM rather than exit(): it runs the ordinary shutdown path, so
+        # an incident that is open right now is closed and its clip cut before
+        # the process goes. The response has to be sent first, or the browser
+        # gets a dropped connection instead of a page.
+        def _bye():
+            time.sleep(1.0)
+            log.warning("restart requested from the panel")
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        threading.Thread(target=_bye, daemon=True, name="restart").start()
+        return render_template("restarting.html", site_name=cfg.site_name,
+                               back=url_for("settings_system"))
 
     @app.route("/settings/system/reset", methods=["POST"])
     @protected

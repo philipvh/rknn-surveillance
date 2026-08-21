@@ -18,6 +18,9 @@ The claim that matters: no sequence of presses can leave a motor running, and
 nothing the panel does bypasses the motor budget or the deadline watchdog.
 """
 import base64
+import time
+import signal
+import os
 import json, datetime as dt, os, sys, tempfile, unittest
 from pathlib import Path
 
@@ -1003,6 +1006,88 @@ class TestSystemSettings(Base):
                                require_password=False)
         self.assertEqual(cfg2.raw["camera"]["sub_path"], "livestream/13",
                          "storing it is only useful if it is read back")
+
+
+
+
+class TestRestartButton(Base):
+    """Restarting from the panel. The dangerous case is when nothing would
+    bring the service back."""
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+        self.killed = []
+
+    def under_systemd(self, yes=True):
+        if yes:
+            os.environ["INVOCATION_ID"] = "test"
+        else:
+            os.environ.pop("INVOCATION_ID", None)
+        self.addCleanup(os.environ.pop, "INVOCATION_ID", None)
+
+    def no_actual_kill(self):
+        """Let the route run without taking the test process with it."""
+        import webapp as webapp_mod
+        real = webapp_mod.os.kill
+        webapp_mod.os.kill = lambda pid, sig: self.killed.append((pid, sig))
+        self.addCleanup(setattr, webapp_mod.os, "kill", real)
+
+    def test_it_refuses_when_nothing_would_restart_it(self):
+        self.under_systemd(False)
+        self.no_actual_kill()
+        r = self.c.post("/settings/restart", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("not running under systemd", r.data.decode())
+        time.sleep(1.4)
+        self.assertEqual(self.killed, [],
+                         "stopping a camera that will not come back is worse "
+                         "than refusing")
+
+    def test_under_systemd_it_signals_itself(self):
+        self.under_systemd(True)
+        self.no_actual_kill()
+        r = self.c.post("/settings/restart", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("Restarting", r.data.decode())
+        time.sleep(1.5)                 # the route waits ~1s so the page lands
+        self.assertEqual(len(self.killed), 1)
+        self.assertEqual(self.killed[0][1], signal.SIGTERM,
+                         "SIGTERM runs the shutdown path, so an open incident "
+                         "still gets its clip")
+
+    def test_the_page_says_it_is_waiting_rather_than_failing(self):
+        self.under_systemd(True)
+        self.no_actual_kill()
+        body = self.c.post("/settings/restart",
+                           headers=self.auth()).data.decode()
+        self.assertIn("healthz", body, "it polls for the service coming back")
+        time.sleep(1.5)
+
+    def test_the_button_is_offered_only_under_systemd(self):
+        self.under_systemd(True)
+        self.assertIn("Restart now",
+                      self.c.get("/settings/system",
+                                 headers=self.auth()).data.decode())
+        self.under_systemd(False)
+        body = self.c.get("/settings/system", headers=self.auth()).data.decode()
+        self.assertNotIn("Restart now", body)
+        self.assertIn("nothing would start it again", body)
+
+    def test_it_needs_authentication(self):
+        self.under_systemd(True)
+        self.no_actual_kill()
+        self.assertEqual(self.c.post("/settings/restart").status_code, 401)
+        time.sleep(1.4)
+        self.assertEqual(self.killed, [],
+                         "an unauthenticated request must never stop the camera")
 
 
 if __name__ == "__main__":

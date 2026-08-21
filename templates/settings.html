@@ -138,6 +138,20 @@ Passwords are ignored: those belong in <code>secrets.yaml</code>.</p>
   <div id="actions"><button type="submit">Save YAML</button></div>
 </form>
 
+<h3>Restart</h3>
+{% if under_systemd %}
+<p id="hint">Stream paths, ports and directories are read when the service
+starts, so a change to those needs a restart before it does anything. An
+incident that is open right now is closed and its clip cut first &mdash;
+nothing is lost.</p>
+<form method="post" action="{{ url_for('settings_restart') }}">
+  <div id="actions"><button type="submit">Restart now</button></div>
+</form>
+{% else %}
+<div class="note">Not running under systemd, so nothing would start it again.
+Restart it the way you started it.</div>
+{% endif %}
+
 {% if has_overrides %}
 <form method="post" action="{{ url_for('settings_system_reset') }}">
   <p style="color:#6d8378;font-size:13px">
