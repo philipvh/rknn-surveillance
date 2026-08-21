@@ -9,9 +9,11 @@ problem, but nothing here is specific to either. The model is a config value,
 the board only has to run the RKNN runtime, and the site's name, trigger
 classes and schedule are all settings.
 
-It runs offline. The club has no internet, so there is no cloud, no app and no
-account — the panel is served from the board over the club LAN, and an optional
-point-to-point LoRa link can carry an alert to somebody's house.
+Internet access is possible but not required. The panel is served from the
+board over the local network and everything works with no uplink at all; where
+there is no internet — as at this club — an optional point-to-point LoRa link
+can still carry an alert to somebody's house, and that far end is the only part
+that needs to be online.
 
 > **This is a hobby project that runs at one tennis club.** It aids
 > surveillance; it does not guarantee it. See [NOTICE](NOTICE) before relying

@@ -81,7 +81,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
     @app.context_processor
     def _site():
         # Every template gets it, so a new page cannot forget to pass it.
-        return {"site_name": cfg.site_name}
+        return {"site_name": cfg.site_name, "source_url": cfg.source_url}
 
     # ------------------------------------------------------------------ auth
     # Deriving a PBKDF2 hash costs about 100 ms on the board, and Basic Auth

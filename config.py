@@ -237,6 +237,15 @@ class Config:
         return str(self._get("web", "title", default="RKNN surveillance"))
 
     @property
+    def source_url(self) -> str:
+        """Where this code came from, linked in the panel footer.
+
+        Configurable so a fork points at itself rather than advertising
+        somebody else's repository.
+        """
+        return str(self._get("web", "source_url", default="") or "")
+
+    @property
     def web_auth_required(self) -> bool:
         return bool(self.web.get("auth_required", True))
 

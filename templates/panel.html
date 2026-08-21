@@ -82,7 +82,9 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
 #legal { margin-top:auto; padding-top:10px; border-top:1px solid #1d2925;
   text-align:right; color:#5f7a6e; font-size:11px; line-height:1.45; }
 #legal b { color:#8fa39a; font-weight:normal; display:block; font-size:12px; }
-#legal a { color:#5f7a6e; text-decoration:underline; }
+#legal a { color:#5f7a6e; text-decoration:underline; display:block;
+  margin-top:3px; }
+#legal a.src { word-break:break-all; }
 #legal .warn { display:block; margin-top:4px; }
 </style>
 </head>
@@ -164,6 +166,9 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
         for any loss or damage arising from its use or from a failure to
         detect, record or report an event.</span>
         <a href="/legal">Apache&nbsp;2.0 &mdash; licence &amp; notices</a>
+        {% if source_url %}
+        <a href="{{ source_url }}" class="src">{{ source_url|replace('https://', '') }}</a>
+        {% endif %}
       </div>
     </div>
   </div>
