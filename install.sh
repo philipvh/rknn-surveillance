@@ -34,7 +34,8 @@ sudo apt-get install -y \
   python3-yaml \
   python3-numpy \
   gpiod \
-  python3-libgpiod
+  python3-libgpiod \
+  openvpn
 
 # yolov10.py needs torch: dfl() and post_process_yolov10() use softmax, topk,
 # gather and cat. The old install.sh never installed it, so a clean board would
@@ -109,6 +110,10 @@ NotifyAccess=main
 User=${USER_NAME}
 WorkingDirectory=${PROJECT_DIR}
 Environment=PYTHONUNBUFFERED=1
+# Where the panel drops a tunnel request for root to pick up. systemd creates
+# it owned by the service user and removes it when the service stops.
+RuntimeDirectory=rknn-vpn
+RuntimeDirectoryMode=0755
 ExecStart=${PYTHON_BIN} ${PROJECT_DIR}/surveillance_main.py
 
 # The last line of defence for the motors. An in-process handler cannot run
@@ -215,6 +220,97 @@ _j_before=$(journalctl --disk-usage 2>/dev/null | grep -o "[0-9.]*[MG]" | tail -
 sudo journalctl --vacuum-size=500M >/dev/null 2>&1 || true
 echo "    journal: ${_j_before:-?} -> $(journalctl --disk-usage 2>/dev/null | grep -o '[0-9.]*[MG]' | tail -1)"
 
+# Let the service join a wireless network without being root. Two narrow
+# NetworkManager actions, for this one user -- not shell root, and not a
+# sudoers rule that would grant far more than intended. polkit 0.105 (Debian
+# 11) reads .pkla; newer versions read .rules, so write whichever applies.
+echo "==> Allowing ${USER_NAME} to manage network connections…"
+# sudo test, not test: /etc/polkit-1/localauthority is mode 700 root, so an
+# unprivileged [ -d ] on anything inside it is false however present it is.
+# Testing it as the ordinary user wrote no rule at all and said it had.
+if sudo test -d /etc/polkit-1/localauthority; then
+  sudo mkdir -p /etc/polkit-1/localauthority/50-local.d
+  # ResultAny, not ResultActive. "Active" means an interactive session on a
+  # local seat. The panel is a daemon with no session at all, and an ssh login
+  # is a session but not an active one -- granting only ResultActive grants
+  # nothing to either of the two things that actually need it.
+  sudo tee /etc/polkit-1/localauthority/50-local.d/50-${SERVICE}-nm.pkla \
+    >/dev/null <<EOF
+[Let ${USER_NAME} manage NetworkManager]
+Identity=unix-user:${USER_NAME}
+Action=org.freedesktop.NetworkManager.settings.modify.system;org.freedesktop.NetworkManager.network-control;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.wifi.scan
+ResultAny=yes
+ResultInactive=yes
+ResultActive=yes
+EOF
+elif sudo test -d /etc/polkit-1/rules.d; then
+  sudo tee /etc/polkit-1/rules.d/50-${SERVICE}-nm.rules >/dev/null <<EOF
+polkit.addRule(function (action, subject) {
+  if (subject.user == "${USER_NAME}" &&
+      action.id.indexOf("org.freedesktop.NetworkManager.") === 0) {
+    return polkit.Result.YES;
+  }
+});
+EOF
+fi
+sudo systemctl reload polkit 2>/dev/null \
+  || sudo systemctl restart polkit 2>/dev/null || true
+
+# Prove it, rather than assume it. Creating and deleting a dummy connection
+# needs exactly the permission the panel needs, and costs nothing.
+if nmcli connection add type dummy ifname _pk_probe \
+     con-name _pk_probe autoconnect no >/dev/null 2>&1; then
+  nmcli connection delete _pk_probe >/dev/null 2>&1
+  echo "    network settings: ${USER_NAME} can change them"
+else
+  echo "!!  network settings: ${USER_NAME} still CANNOT change them."
+  echo "!!  Joining a wireless network from the panel will not work."
+  echo "!!  Check: sudo cat /etc/polkit-1/localauthority/50-local.d/50-${SERVICE}-nm.pkla"
+fi
+
+# Let the panel work the tunnel without being root. A validating helper plus
+# a sudoers rule naming only that helper -- not systemctl, whose arguments a
+# wildcard rule cannot safely constrain.
+if [ -f "${PROJECT_DIR}/vpnctl.sh" ]; then
+  echo "==> Installing the tunnel helper…"
+  sudo install -o root -g root -m 755 "${PROJECT_DIR}/vpnctl.sh" \
+    /usr/local/sbin/rknn-vpnctl
+  sudo tee /etc/sudoers.d/${SERVICE}-vpn >/dev/null <<EOF
+${USER_NAME} ALL=(root) NOPASSWD: /usr/local/sbin/rknn-vpnctl
+EOF
+  sudo chmod 440 /etc/sudoers.d/${SERVICE}-vpn
+
+  # The panel cannot use sudo: its own unit sets NoNewPrivileges=yes, which is
+  # exactly what stops a setuid binary elevating. So it asks by writing a file
+  # into its runtime directory, and root notices.
+  sudo tee /etc/systemd/system/${SERVICE}-vpn.path >/dev/null <<EOF
+[Unit]
+Description=Watch for a tunnel request from the ${SERVICE} panel
+
+[Path]
+PathExists=/run/rknn-vpn/request
+Unit=${SERVICE}-vpn.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo tee /etc/systemd/system/${SERVICE}-vpn.service >/dev/null <<EOF
+[Unit]
+Description=Apply a tunnel request from the ${SERVICE} panel
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rknn-vpnctl --from-request /run/rknn-vpn/request
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now ${SERVICE}-vpn.path
+  # A bad sudoers file locks everyone out of sudo, so check before trusting it.
+  if ! sudo visudo -c -f /etc/sudoers.d/${SERVICE}-vpn >/dev/null 2>&1; then
+    echo "!!  the sudoers rule did not validate; removing it"
+    sudo rm -f /etc/sudoers.d/${SERVICE}-vpn
+  fi
+fi
+
 echo "==> Reloading systemd daemon…"
 sudo systemctl daemon-reload
 
@@ -241,7 +337,17 @@ _PORT=$(cd "${PROJECT_DIR}" && "${PYTHON_BIN}" -c \
   2>/dev/null || echo 8080)
 
 if [ -n "${_ok}" ]; then
-  echo "==> Done -- ${SERVICE} is active."
+  # The camera segment is not created here: it changes the machine's networking
+# and deserves to be a deliberate act, not a side effect of a code deploy.
+if ! ip -4 addr show 2>/dev/null | grep -q "inet 192.168.91.1/"; then
+  echo
+  echo "NOTE: the camera network is not configured on this board."
+  echo "      The camera and the wall tablet live on it, and it is the part"
+  echo "      that must work with no internet at all:"
+  echo "          sudo bash ${PROJECT_DIR}/setup_network.sh"
+fi
+
+echo "==> Done -- ${SERVICE} is active."
   echo "• Wall panel (the board has more than one NIC):"
   for _a in $(hostname -I); do echo "    http://${_a}:${_PORT}/"; done
 else

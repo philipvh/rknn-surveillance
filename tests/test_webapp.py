@@ -1090,5 +1090,96 @@ class TestRestartButton(Base):
                          "an unauthenticated request must never stop the camera")
 
 
+
+
+class TestEveryPageIsValidHtml(Base):
+    """Render each page and check the tags actually nest.
+
+    This exists because a settings pane was once inserted into the middle of
+    a class="" attribute. Every string you would grep for was present in the
+    output, so a check like `assertIn("Restart now", body)` passed happily
+    while no browser would ever draw the button. Presence of text is not
+    evidence that a page renders.
+    """
+
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr"}
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def check(self, html, where):
+        from html.parser import HTMLParser
+
+        problems, stack = [], []
+        outer = self
+
+        class P(HTMLParser):
+            def handle_starttag(self, tag, attrs):
+                if tag not in outer.VOID:
+                    stack.append((tag, self.getpos()[0]))
+
+            def handle_endtag(self, tag):
+                if tag in outer.VOID:
+                    return
+                if not stack:
+                    problems.append("</%s> at line %d closes nothing"
+                                    % (tag, self.getpos()[0]))
+                    return
+                if stack[-1][0] != tag:
+                    problems.append(
+                        "</%s> at line %d, but <%s> from line %d is open"
+                        % (tag, self.getpos()[0], stack[-1][0], stack[-1][1]))
+                    for i in range(len(stack) - 1, -1, -1):
+                        if stack[i][0] == tag:
+                            del stack[i:]
+                            return
+                    return
+                stack.pop()
+
+        p = P(convert_charrefs=True)
+        p.feed(html)
+        self.assertEqual(problems, [], "%s: %s" % (where, problems[:3]))
+        self.assertEqual([t for t, _ in stack], [],
+                         "%s: never closed" % where)
+
+    def test_every_page_nests_correctly(self):
+        for path in ("/", "/media", "/settings", "/settings/credentials",
+                     "/settings/system", "/settings/wifi", "/legal"):
+            r = self.c.get(path, headers=self.auth())
+            self.assertEqual(r.status_code, 200, path)
+            self.check(r.data.decode(), path)
+
+    def test_no_jinja_survives_into_the_output(self):
+        # A stray {% %} means a block was pasted somewhere it is not parsed,
+        # which is the other half of the same failure.
+        for path in ("/settings", "/settings/credentials",
+                     "/settings/system", "/settings/wifi"):
+            body = self.c.get(path, headers=self.auth()).data.decode()
+            for marker in ("{%", "{{"):
+                self.assertNotIn(marker, body, "%s leaked %s" % (path, marker))
+
+    def test_each_settings_tab_marks_itself_current(self):
+        # The bug hid inside a tab link's class attribute, so assert the
+        # attribute still does its job on every tab.
+        import re
+        for path, tab in (("/settings", "Categories"),
+                          ("/settings/credentials", "Credentials"),
+                          ("/settings/system", "System"),
+                          ("/settings/wifi", "Wi-Fi")):
+            body = self.c.get(path, headers=self.auth()).data.decode()
+            m = re.search(r'<a[^>]*class="on"[^>]*>([^<]+)</a>', body)
+            self.assertIsNotNone(m, "%s marks no tab as current" % path)
+            self.assertEqual(m.group(1).strip(), tab, path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

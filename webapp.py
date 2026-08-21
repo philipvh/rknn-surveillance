@@ -42,6 +42,8 @@ from pathlib import Path
 import yaml
 
 import config as config_mod
+import vpn
+from wifi import WiFi
 
 from flask import (Flask, Response, abort, jsonify, redirect,
                    render_template, request, send_from_directory, url_for)
@@ -427,6 +429,8 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             has_overrides=bool(settings is not None
                                and settings.config_overrides),
             under_systemd=_under_systemd(),
+            wifi_err="", wifi_msg="", wifi=None, wifi_networks=[],
+            wifi_available=True, vpn=None, checked="", vpn_control=False,
             disk=_disk_report(),
             likely=[], rest=[], active=set(), overridden=False,
             defaults=sorted(cfg.trigger_classes), saved="")
@@ -590,6 +594,51 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                                    require_password=False), ""
         except Exception as e:
             return None, str(e)
+
+    @app.route("/settings/wifi", methods=["GET", "POST"])
+    @protected
+    def settings_wifi():
+        radio = WiFi()
+        err = msg = ""
+        if request.method == "POST":
+            what = request.form.get("do") or "connect"
+            if what == "check":
+                pass                      # handled below; nothing to change
+            elif what in ("vpn-enable", "vpn-disable", "vpn-restart"):
+                ok_, m = vpn.control(what.split("-", 1)[1],
+                                     request.form.get("tunnel") or "")
+                (msg, err) = (m, "") if ok_ else ("", m)
+            elif what == "forget":
+                ok_, m = radio.forget(request.form.get("ssid") or "")
+                (msg, err) = (m, "") if ok_ else ("", m)
+            elif what == "disconnect":
+                ok_, m = radio.disconnect()
+                (msg, err) = (m, "") if ok_ else ("", m)
+            else:
+                ssid = (request.form.get("ssid") or "").strip()
+                # A saved network is rejoined without asking again; the
+                # password nobody typed is the one nobody can get wrong.
+                pw = request.form.get("password") or ""
+                ok_, m = radio.connect(
+                    ssid, pw or None,
+                    hidden=bool(request.form.get("hidden")))
+                (msg, err) = (m, "") if ok_ else ("", m)
+
+        checked = ""
+        if request.method == "POST" and (request.form.get("do") == "check"):
+            ok_r, m_r = vpn.reach()
+            ok_d, m_d = vpn.resolves()
+            checked = "%s %s" % (m_r, m_d)
+            err = "" if (ok_r and ok_d) else checked
+            msg = checked if (ok_r and ok_d) else ""
+
+        return _settings_page("wifi", wifi_err=err, wifi_msg=msg,
+                              vpn=vpn.status(), checked=checked,
+                              vpn_control=vpn.can_control(),
+                              wifi=radio.status(),
+                              wifi_networks=radio.scan(
+                                  rescan=request.method == "GET"),
+                              wifi_available=radio.available)
 
     @app.route("/settings/system", methods=["GET", "POST"])
     @protected

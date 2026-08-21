@@ -44,6 +44,33 @@ h3 { margin:20px 0 8px; font-size:11px; letter-spacing:.14em;
 .field .sub { display:block; font-size:12px; color:#6d8378; margin-top:4px; }
 code { color:#9fd8bf; font-family:monospace; }
 .field.set input { border-color:#3f8a6c; }
+.net { -webkit-flex:0 0 auto; flex:0 0 auto; width:250px; margin:0 10px 10px 0;
+  padding:12px; background:#131c18; border:1px solid #24322c; }
+.netname { color:#dfe7e1; font-size:15px; word-break:break-all; }
+.netmeta { color:#6d8378; font-size:12px; margin:3px 0 6px; }
+.net .bar { height:6px; margin-bottom:8px; max-width:none; }
+.net input[type=password] { width:100%; font-size:15px; padding:9px;
+  background:#0f1714; color:#dfe7e1; border:1px solid #2f3f38;
+  margin-bottom:8px; }
+.net button { font-size:14px; padding:10px 14px; background:#2f6a53;
+  color:#fff; border:1px solid #3f8a6c; font-weight:bold; }
+.net button.plainbtn { background:#1b2721; color:#8fa39a;
+  border-color:#2f3f38; font-weight:normal; margin-left:6px; }
+.badge { font-size:11px; padding:2px 6px; background:#1b2721; color:#8fa39a;
+  border:1px solid #2f3f38; margin-left:4px; }
+.badge.on { background:#2f6a53; color:#fff; border-color:#3f8a6c; }
+/* The same pill switch as the panel's. It has to be declared here too: this
+   page extends base.html, which does not carry panel.html's styles, and an
+   unstyled .sw is a tiny empty button nobody can see. */
+button.sw { width:54px; height:30px; padding:0; border-radius:15px;
+  background:#1b2721; border:1px solid #2f3f38; position:relative;
+  display:inline-block; vertical-align:middle; }
+button.sw .knob { position:absolute; top:3px; left:3px; width:22px;
+  height:22px; border-radius:11px; background:#6d8378;
+  -webkit-transition:left .15s ease, background .15s ease;
+  transition:left .15s ease, background .15s ease; }
+button.sw.on { background:#2f6a53; border-color:#3f8a6c; }
+button.sw.on .knob { left:27px; background:#eef5f1; }
 .field { max-width:34em; }
 textarea { width:100%; max-width:52em; font-family:monospace; font-size:14px;
   padding:10px; background:#0f1714; color:#dfe7e1; border:1px solid #2f3f38;
@@ -72,7 +99,222 @@ textarea { width:100%; max-width:52em; font-family:monospace; font-size:14px;
   <a href="{{ url_for('settings_page') }}"
      class="{% if tab == 'classes' %}on{% endif %}">Categories</a>
   <a href="{{ url_for('settings_credentials') }}"
-     class="{% if tab == 'system' %}
+     class="{% if tab == 'credentials' %}on{% endif %}">Credentials</a>
+  <a href="{{ url_for('settings_system') }}"
+     class="{% if tab == 'system' %}on{% endif %}">System</a>
+  <a href="{{ url_for('settings_wifi') }}"
+     class="{% if tab == 'wifi' %}on{% endif %}">Wi-Fi</a>
+</div>
+
+{% if tab == 'wifi' %}
+{% if not wifi_available %}
+<div class="note err">NetworkManager is not installed, so wireless cannot be
+configured from here.</div>
+{% elif not wifi.present %}
+<div class="note">
+  <b>No wireless adapter.</b> The board is on ethernet only. Plug a USB Wi-Fi
+  dongle in and reload this page &mdash; there is nothing to set up without a
+  radio.
+</div>
+{% else %}
+
+{% if wifi_msg %}<div class="note ok">{{ wifi_msg }}</div>{% endif %}
+{% if wifi_err %}<div class="note err">{{ wifi_err }}</div>{% endif %}
+
+<h3>Now</h3>
+{% if wifi.connected %}
+<p id="hint">On <b style="color:#dfe7e1">{{ wifi.ssid }}</b> as
+<code>{{ wifi.ip }}</code>{% if wifi.signal %}, signal {{ wifi.signal }}%{% endif %}.</p>
+<form method="post" action="{{ url_for('settings_wifi') }}">
+  <input type="hidden" name="do" value="disconnect">
+  <button type="submit" style="font-size:13px;padding:8px 12px;
+    background:#1b2721;color:#8fa39a;border:1px solid #2f3f38;">Disconnect</button>
+</form>
+{% else %}
+<p id="hint">Not connected to any wireless network
+({{ wifi.state }}). The wired connection is unaffected either way &mdash;
+nothing here can take the board off ethernet.</p>
+{% endif %}
+
+<h3>Networks in range</h3>
+{% if not wifi_networks %}
+<p id="hint">Nothing found. The dongle may still be starting up; reload in a
+few seconds.</p>
+{% else %}
+<div class="grid">
+  {% for n in wifi_networks %}
+  <form method="post" action="{{ url_for('settings_wifi') }}" class="net">
+    <input type="hidden" name="ssid" value="{{ n.ssid }}">
+    <div class="netname">
+      {{ n.ssid }}
+      {% if n.in_use %}<span class="badge on">connected</span>
+      {% elif n.saved %}<span class="badge">saved</span>{% endif %}
+    </div>
+    <div class="netmeta">
+      {{ n.signal }}%
+      &nbsp;&middot;&nbsp;
+      {% if n.security in ('open', '', '--') %}open{% else %}{{ n.security }}{% endif %}
+    </div>
+    <div class="bar"><div class="fill" style="width:{{ n.signal }}%"></div></div>
+    {% if not n.in_use %}
+    {% if n.security not in ('open', '', '--') and not n.saved %}
+    <input type="password" name="password" placeholder="password"
+           autocomplete="off" autocapitalize="none">
+    {% endif %}
+    <button type="submit">{{ "Reconnect" if n.saved else "Connect" }}</button>
+    {% endif %}
+    {% if n.saved %}
+    <button type="submit" name="do" value="forget" class="plainbtn">Forget</button>
+    {% endif %}
+  </form>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h3>A network that does not broadcast its name</h3>
+<p id="hint">A phone hotspot set to hidden, for instance.</p>
+<form method="post" action="{{ url_for('settings_wifi') }}">
+  <div class="field">
+    <label for="hssid">Network name</label>
+    <input type="text" id="hssid" name="ssid" autocapitalize="none"
+           autocorrect="off" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="hpw">Password</label>
+    <input type="password" id="hpw" name="password" autocomplete="off">
+  </div>
+  <input type="hidden" name="hidden" value="1">
+  <div id="actions"><button type="submit">Connect</button></div>
+</form>
+
+<div class="note">
+  The password is handed to NetworkManager on standard input, never as a
+  command argument, and it is stored by NetworkManager at mode 600 where only
+  root can read it. This page never sees it again and it is not in the
+  settings file.
+</div>
+
+{% endif %}
+
+<h3>Remote access</h3>
+{% if vpn %}
+<p id="hint">A phone hotspot puts the board behind carrier NAT: it can reach
+out, but nothing can reach in. An OpenVPN client dialling a server you control
+fixes that &mdash; and the phone's own VPN does <b>not</b> cover it, because
+Android does not route tethered traffic through the tunnel.</p>
+
+{% if vpn.up %}
+<div class="note ok">
+  <b>Tunnel up.</b> The board is reachable at
+  <code>{{ vpn.address }}</code> on <code>{{ vpn.tunnels[0].iface }}</code>.
+  From your desk: <code>ssh radxa@{{ vpn.address }}</code> and
+  <code>./deploy.sh radxa@{{ vpn.address }} --restart</code>.
+</div>
+{% elif not vpn.installed %}
+<div class="note">
+  <b>OpenVPN is not installed.</b> On the board:
+  <br><code>sudo apt install openvpn</code>
+</div>
+{% elif not vpn.configs %}
+<div class="note">
+  <b>Installed, but no client configuration.</b> Certificates are not
+  something to upload through a web page, so put it there over ssh:
+  <br><code>sudo install -m 600 board.ovpn {{ vpn.client_dir }}/club.conf</code>
+  <br><code>sudo systemctl enable --now openvpn-client@club</code>
+  <br>Add <code>keepalive 10 60</code> and <code>persist-tun</code> to the
+  config &mdash; a hotspot drops often, and without those it will not come back.
+</div>
+{% else %}
+<div class="note err">
+  <b>Configured but no tunnel.</b> Check it with
+  <code>sudo systemctl status openvpn-client@{{ vpn.configs[0] }}</code>
+</div>
+{% endif %}
+
+{% if vpn.units %}
+<div class="table-wrap">
+  <table class="tbl">
+    <tr><th>Tunnel</th><th>Running</th><th>Start at boot</th><th></th></tr>
+    {% for u in vpn.units %}
+    <tr>
+      <td><code>{{ u.name }}</code></td>
+      <td>{{ u.active }}</td>
+      <td>
+        {% if vpn_control %}
+        <form method="post" action="{{ url_for('settings_wifi') }}"
+              style="display:inline">
+          <input type="hidden" name="tunnel" value="{{ u.name }}">
+          <input type="hidden" name="do"
+                 value="{% if u.enabled == 'enabled' %}vpn-disable{% else %}vpn-enable{% endif %}">
+          <button type="submit" class="sw {% if u.enabled == 'enabled' %}on{% endif %}"
+                  title="{% if u.enabled == 'enabled' %}on at boot{% else %}off at boot{% endif %}"><span class="knob"></span></button>
+        </form>
+        {% else %}
+        {{ u.enabled }}
+        {% endif %}
+      </td>
+      <td>
+        {% if vpn_control %}
+        <form method="post" action="{{ url_for('settings_wifi') }}"
+              style="display:inline">
+          <input type="hidden" name="tunnel" value="{{ u.name }}">
+          <input type="hidden" name="do" value="vpn-restart">
+          <button type="submit" class="plainbtn">Reconnect</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% if not vpn_control %}
+<div class="note err">
+  <b>There is no on/off switch yet.</b> Turning the tunnel on and off needs a
+  root helper and its watcher, which are not installed. Over ssh to the board:
+  <br><code>cd ~/rknn-surveillance &amp;&amp; ./install.sh</code>
+  <br>Then this table gets a switch per tunnel. Until then, from a shell:
+  <br><code>sudo systemctl disable --now openvpn-client@{{ vpn.configs[0] if vpn.configs else 'club' }}</code>
+  &mdash; off, and stays off after a reboot
+  <br><code>sudo systemctl enable --now openvpn-client@{{ vpn.configs[0] if vpn.configs else 'club' }}</code>
+  &mdash; on, and comes back after a reboot
+</div>
+{% else %}
+<p class="sub">On means it comes up at every boot &mdash; which is what you
+want before the board leaves. It also starts immediately.</p>
+{% endif %}
+
+<div class="note">
+  <b>By hand, over ssh</b> &mdash; the switch does exactly these:
+  {% for u in vpn.units %}
+  <br><code>sudo systemctl enable --now openvpn-client@{{ u.name }}</code>
+  &nbsp;on, and comes back after a reboot
+  <br><code>sudo systemctl disable --now openvpn-client@{{ u.name }}</code>
+  &nbsp;off, and stays off after a reboot
+  <br><code>sudo systemctl restart openvpn-client@{{ u.name }}</code>
+  &nbsp;reconnect, leaving the boot setting alone
+  <br><code>systemctl status openvpn-client@{{ u.name }}</code>
+  &nbsp;why it will not start
+  {% endfor %}
+  <br><br><code>--now</code> is the part people miss: without it you change
+  only the boot setting and the running tunnel carries on regardless.
+</div>
+{% endif %}
+
+<p class="sub">Traffic leaves by
+  <code>{{ vpn.route.dev if vpn.route.dev else 'no default route' }}</code>{%
+  if vpn.route.via %} via {{ vpn.route.via }}{% endif %}.</p>
+
+<form method="post" action="{{ url_for('settings_wifi') }}">
+  <input type="hidden" name="do" value="check">
+  <button type="submit" style="font-size:14px;padding:10px 16px;
+    background:#1b2721;color:#dfe7e1;border:1px solid #2f3f38;">
+    Check internet</button>
+  <span class="sub">&nbsp;one TCP connect and one DNS lookup, only when you
+  press this &mdash; the board does not phone out on its own.</span>
+</form>
+{% endif %}
+
+{% elif tab == 'system' %}
 {% if not editable %}
 <div class="note">This process is serving recordings only, so nothing here can
 be changed. Start the surveillance service.</div>
@@ -167,12 +409,7 @@ from <code>config.yaml</code> and <code>config.local.yaml</code>.</p>
 {% endif %}
 
 {% endif %}
-{% elif tab == 'credentials' %}on{% endif %}">Credentials</a>
-  <a href="{{ url_for('settings_system') }}"
-     class="{% if tab == 'system' %}on{% endif %}">System</a>
-</div>
-
-{% if tab == 'credentials' %}
+{% elif tab == 'credentials' %}
 {% if not editable %}
 <div class="note">This process is serving recordings only, so the login cannot
 be changed here. Start the surveillance service.</div>

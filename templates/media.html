@@ -221,9 +221,21 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
      looked at. */
   var autoScrolling = false;
 
+  /* Distance from the top of the strip's content, computed by walking up
+     rather than assuming which ancestor is the offset parent. Subtracting
+     film.offsetTop was wrong: the strip is position:relative, so a frame's
+     offsetTop is already relative to it, and taking the strip's own page
+     offset off again put every frame too high -- which is why switching tabs
+     jumped the strip towards the top. */
+  function offsetWithin(el) {
+    var y = 0, n = el;
+    while (n && n !== film) { y += n.offsetTop; n = n.offsetParent; }
+    return y;
+  }
+
   function ensureVisible(el) {
     if (!el) return;
-    var top = el.offsetTop - film.offsetTop;
+    var top = offsetWithin(el);
     var bottom = top + el.offsetHeight;
     var want = film.scrollTop;
     if (top < want) want = top;
@@ -236,26 +248,92 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
 
   /* scroll: only ever true for a deliberate move -- a tap, or following the
      live edge. Appending frames must leave the view exactly where it is. */
+  /* Give an image its source, once. Anything still holding data-src has not
+     been fetched yet. */
+  function hydrate(frame) {
+    if (!frame || !frame.getElementsByTagName) return;
+    var im = frame.getElementsByTagName('img')[0];
+    if (!im) return;
+    var u = im.getAttribute('data-src');
+    if (!u) return;
+    im.removeAttribute('data-src');
+    im.src = u;
+  }
+
+  function hydrateGroup(g) {
+    var kids = g.body.childNodes, i;
+    for (i = 0; i < kids.length; i++) hydrate(kids[i]);
+  }
+
+  /* Frames on screen, plus a screen's worth either side so scrolling does not
+     show empty boxes. Cheap enough to call on every scroll. */
+  var hydrating = false;
+  function hydrateVisible() {
+    if (hydrating) return;
+    hydrating = true;
+    var top = film.scrollTop - film.clientHeight;
+    var bottom = film.scrollTop + film.clientHeight * 2;
+    var kids = film.getElementsByClassName('frame'), i;
+    for (i = 0; i < kids.length; i++) {
+      var el = kids[i];
+      if (!el.offsetParent) continue;              /* inside a folded group */
+      var y = offsetWithin(el);
+      if (y >= top && y <= bottom) hydrate(el);
+    }
+    hydrating = false;
+  }
+
+  /* Whether a moment has a clip changes only when the clip list changes, so
+     it is worked out once and remembered on the element. Recomputing it per
+     frame per mark meant a quarter of a million comparisons on every click,
+     which is most of why the tablet felt slow. */
+  function paintClipMarkers() {
+    var kids = film.getElementsByClassName('frame'), i;
+    for (i = 0; i < kids.length; i++) {
+      var v = parseInt(kids[i].getAttribute('data-secs'), 10);
+      kids[i].setAttribute('data-hasclip', clipCovering(v) ? '1' : '0');
+    }
+    markedClips = CLIPS.length;
+  }
+
   function mark(scroll) {
+    if (markedClips !== CLIPS.length) paintClipMarkers();
+
     var kids = film.getElementsByClassName('frame'), i, target = null;
     for (i = 0; i < kids.length; i++) {
-      if (!kids[i].getAttribute) continue;
-      var v = parseInt(kids[i].getAttribute('data-secs'), 10);
-      var cls = 'frame' + (clipCovering(v) ? ' hasclip' : '');
-      kids[i].className = cls + (v === chosen ? ' on' : '');
-      if (v === chosen) target = kids[i];
+      if (parseInt(kids[i].getAttribute('data-secs'), 10) === chosen) {
+        target = kids[i];
+        break;
+      }
     }
-    /* Which group holds the selection, so a folded group still shows it. */
+
+    /* Which group holds the selection, and which single thumbnail each group
+       shows while folded. Worked out before anything is written, so the pass
+       below can decide each element's final class in one go. */
     var sel = target ? groupOf(target) : null;
+    /* Flagged on the element rather than collected into a list: checking
+       membership of a 155-entry list for each of 3000 frames is the same
+       quarter-million comparisons this rewrite exists to remove. */
+    for (i = 0; i < wasShown.length; i++) wasShown[i]._shown = false;
+    wasShown = [];
     for (var k in groupEls) {
       if (!groupEls.hasOwnProperty(k)) continue;
       var g2 = groupEls[k];
-      g2.head.className = (g2 === sel) ? g2.headBase + ' sel' : g2.headBase;
-      /* Pick the one thumbnail this group shows while folded. */
+      var wantHead = (g2 === sel) ? g2.headBase + ' sel' : g2.headBase;
+      if (g2.head.className !== wantHead) g2.head.className = wantHead;
       var show = (g2 === sel && target) ? target : g2.body.firstChild;
-      if (show && show.className !== undefined) {
-        show.className += ' shown';
-      }
+      if (show) { show._shown = true; wasShown.push(show); hydrate(show); }
+    }
+
+    /* One pass, and only write when the value actually differs -- assigning
+       className invalidates style even when nothing changed. */
+    for (i = 0; i < kids.length; i++) {
+      var el = kids[i];
+      var want = (el.getAttribute('data-hasclip') === '1')
+                 ? 'frame hasclip' : 'frame';
+      if (el === target) want += ' on';
+      if (el._shown) want += ' shown';
+      if (el.className !== want) el.className = want;
     }
 
     if (!scroll || !target) return;
@@ -269,6 +347,7 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
   }
 
   function showStill() {
+    playing = '';                     /* the player is gone; nothing is showing */
     var shot = nearestShot(chosen);
     if (!shot) {
       stage.innerHTML = '<div class="empty">no stills for this day</div>';
@@ -322,6 +401,19 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
        Offsetting from the wrong one lands up to a minute out. */
     var base = useAnn ? clip.annT0 : clip.t0;
     var offset = Math.max(0, chosen - base);
+
+    /* Rebuilding the element restarts playback from zero. The poll calls this
+       every few seconds while following, so a clip could never play for
+       longer than one poll interval -- worse the busier the camera, because
+       every arriving still triggered another redraw. If the same file at the
+       same offset is already on screen, leave it alone. */
+    var want = src + '@' + offset;
+    if (playing === want && stage.firstChild && stage.firstChild.tagName === 'VIDEO') {
+      caption.innerHTML = videoCaption(clip, useAnn, fellBack, offset, base);
+      mark(drawScroll);
+      return;
+    }
+    playing = want;
     stage.innerHTML = '';
     var v = document.createElement('video');
     v.setAttribute('controls', 'controls');
@@ -336,14 +428,18 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
       }
     }, false);
     stage.appendChild(v);
-    caption.innerHTML = '<span id="live">' + (following ? 'live' : 'paused') +
+    caption.innerHTML = videoCaption(clip, useAnn, fellBack, offset, base);
+    mark(drawScroll);
+  }
+
+  function videoCaption(clip, useAnn, fellBack, offset, base) {
+    return '<span id="live" class="off">' + 'playing' +
       '</span>' + hhmmss(chosen) + ' &nbsp;&middot;&nbsp; ' +
       (useAnn ? 'annotated ' + clip.annSize +
                 (fellBack ? ' &mdash; no full-resolution cut for this one' : '')
               : 'full resolution ' + clip.size) +
       ' &nbsp;&middot;&nbsp; +' + offset + 's into a clip starting ' +
       hhmmss(base);
-    mark(drawScroll);
   }
 
   function draw(scroll) {
@@ -366,7 +462,12 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
       var ph = document.createElement('span');
       ph.className = 'ph';
       var im = document.createElement('img');
-      im.src = item.url;
+      /* Not im.src -- see hydrate(). A day can hold thousands of stills, and
+         setting src here makes the browser fetch every one of them the moment
+         the page loads, hidden or not: display:none does not stop an image
+         loading. With six connections per host, the video you actually asked
+         for queues behind all of them and takes minutes to start. */
+      im.setAttribute('data-src', item.url);
       ph.appendChild(im);
       b.appendChild(ph);
     }
@@ -413,7 +514,9 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
       e.preventDefault();
       collapsed[key] = !collapsed[key];
       paint(g);
+      if (!collapsed[key]) hydrateGroup(g);
       mark(false);
+      hydrateVisible();
     }, false);
     return g;
   }
@@ -426,6 +529,8 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
     var g = groupEls[key];
     if (!g) { g = makeGroup(key, clip); groupEls[key] = g; film.appendChild(g.wrap); }
     var f = makeFrame(item, withImage);
+    var fs = (item.secs !== undefined) ? item.secs : item.start;
+    f.setAttribute('data-hasclip', clipCovering(fs) ? '1' : '0');
     /* Every group must have one thumbnail marked shown from the moment it is
        built, or a folded group would render empty until the next mark(). */
     if (g.n === 0) f.className += ' shown';
@@ -437,6 +542,9 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
   function buildFilm() {
     film.innerHTML = '';
     groupEls = {};
+    /* New elements carry no markers, so whatever was computed is void. */
+    markedClips = -1;
+    wasShown = [];
     var list = SHOTS.length ? SHOTS : CLIPS;
     var withImage = !!SHOTS.length;
     if (!list.length) {
@@ -462,6 +570,9 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
        at and read as the button doing nothing. */
     mark(!v);
     if (v) film.scrollTop = 0;
+    /* Expanding all could put thousands of images in view at once, so only
+       fetch the ones actually on screen. */
+    hydrateVisible();
   }
 
   function groupOf(el) {
@@ -482,6 +593,12 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
      already on it -- the same courtesy tail -f extends. */
   var following = true;
   var drawScroll = false;
+  /* Which file at which offset the player is currently showing, so a redraw
+     that would change nothing can be skipped. */
+  var playing = '';
+  /* How many clips the hasclip markers were computed for. */
+  var markedClips = -1;
+  var wasShown = [];
 
   function poll() {
     var x = new XMLHttpRequest();
@@ -507,6 +624,7 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
       }
 
       if (clipsChanged) {
+        markedClips = -1;            /* the play markers need recomputing */
         /* A cut finished, so stills that were loose now belong to a clip and
            the groups have to be redrawn. Keep the scroll where it was: the
            whole point of the strip is that it holds still. */
@@ -522,11 +640,17 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
         }
       }
       if (added || clipsChanged) {
-        if (following && SHOTS.length) chosen = SHOTS[SHOTS.length - 1].secs;
+        /* Following the live edge belongs to the stills tab. A clip has its
+           own timeline, and dragging the selection to the newest still every
+           few seconds meant a video could never play for longer than one poll
+           -- it jumped to a different moment and started again. */
+        if (following && tab === 'jpg' && SHOTS.length) {
+          chosen = SHOTS[SHOTS.length - 1].secs;
+        }
         /* Re-mark so the play markers appear as clips are cut. Not following
            means the strip has grown under a view someone is reading: update
            the markers, move nothing. */
-        if (following) draw(true); else mark(false);
+        if (following && tab === 'jpg') draw(true); else mark(false);
       }
     };
     x.send();
@@ -614,6 +738,7 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
   /* Scrolling the strip by hand means someone is looking for something, so
      stop chasing the newest frame. Tapping the indicator resumes it. */
   film.addEventListener('scroll', function () {
+    hydrateVisible();
     if (autoScrolling || !following) return;
     var atEnd = (film.scrollTop + film.clientHeight) >= (film.scrollHeight - 12);
     if (!atEnd) {
@@ -634,6 +759,7 @@ body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
 
   buildFilm();
   draw(true);
+  hydrateVisible();
 })();
 </script>
 {% endblock %}
