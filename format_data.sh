@@ -113,11 +113,18 @@ DATA="${MOUNT}/tvw"
 mkdir -p "$DATA"/{recordings/main,recordings/sub,events,detections}
 chown -R "$OWNER:$OWNER" "$MOUNT"
 
+# NO_FSTAB=1 when this is a staging mount that something else will move into
+# place afterwards. Writing an entry for a temporary mountpoint leaves the disk
+# mounted twice at the next boot, under two names.
+if [ "${NO_FSTAB:-0}" = "1" ]; then
+  echo "NO_FSTAB=1: leaving /etc/fstab alone"
+else
 prune_fstab "$MOUNT"
 # nofail: a dead or missing disk must never stop the board from booting.
 echo "UUID=$UUID  $MOUNT  ext4  defaults,nofail,noatime,x-systemd.device-timeout=10  0  2" >> /etc/fstab
 systemctl daemon-reload || true
 echo "added to /etc/fstab (nofail)"
+fi
 
 echo
 df -h "$MOUNT" | tail -1 | awk '{print "  " $4 " free of " $2 " at " $6}'
