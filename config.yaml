@@ -94,6 +94,8 @@ paths:
 web:
   # Shown in the panel and in alerts. Set it to the site's own name.
   title: "RKNN surveillance"
+  # Linked in the panel footer. Point it at your own fork if you have one.
+  source_url: "https://github.com/philipvh/rknn-surveillance"
   bind: 0.0.0.0
   port: 8080
   # The panel is served from inside the surveillance process so it drives the

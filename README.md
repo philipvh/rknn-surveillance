@@ -56,7 +56,7 @@ board, these parts are worth stealing:
 ## Getting it running
 
 ```bash
-git clone <this repo> rknn-surveillance
+git clone https://github.com/philipvh/rknn-surveillance
 cd rknn-surveillance
 
 cp config.local.example.yaml config.local.yaml   # your camera's address
