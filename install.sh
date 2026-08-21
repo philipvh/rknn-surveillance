@@ -17,7 +17,7 @@ set -euo pipefail
 
 # One place to change the name. The service is derived from it, so the unit
 # and the directory can never drift apart.
-PROJECT_NAME="tvw_surveillance"
+PROJECT_NAME="rknn-surveillance"
 PROJECT_DIR="/home/radxa/${PROJECT_NAME}"
 SERVICE="${PROJECT_NAME//_/-}"
 USER_NAME="radxa"
@@ -99,7 +99,7 @@ sudo chown -R "${USER_NAME}:${USER_NAME}" "${PROJECT_DIR}"
 echo "==> Installing systemd service: ${SERVICE}.service"
 sudo tee /etc/systemd/system/${SERVICE}.service >/dev/null <<EOF
 [Unit]
-Description=TVW camera (detection, recording, PTZ, wall panel)
+Description=RKNN surveillance (detection, recording, PTZ, panel)
 After=network-online.target time-sync.target
 Wants=network-online.target
 
@@ -141,7 +141,7 @@ ProtectSystem=full
 # the unit dies with status=200/CHDIR before Python runs. ReadWritePaths does
 # not punch through it, and =tmpfs + BindPaths was tried on this board
 # (systemd 247) and failed the same way. To get this hardening back, move the
-# project to /opt/tvw_surveillance -- then =yes costs nothing.
+# project to /opt/${PROJECT_NAME} -- then =yes costs nothing.
 ProtectHome=no
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
@@ -201,7 +201,7 @@ fi
 
 echo "==> Limiting the journal so logs cannot fill the disk…"
 sudo mkdir -p /etc/systemd/journald.conf.d
-sudo tee /etc/systemd/journald.conf.d/tvw.conf >/dev/null <<'EOF'
+sudo tee /etc/systemd/journald.conf.d/${SERVICE}.conf >/dev/null <<'EOF'
 [Journal]
 SystemMaxUse=500M
 MaxRetentionSec=1month

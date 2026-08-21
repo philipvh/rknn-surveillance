@@ -209,7 +209,7 @@ class TestLiveView(Base):
         self.assertIn("multipart/x-mixed-replace", r.headers["Content-Type"])
         it = r.response
         chunk = next(iter(it))
-        self.assertIn(b"--tvwframe", chunk)
+        self.assertIn(b"--rknnframe", chunk)
         self.assertIn(b"image/jpeg", chunk)
         it.close()
 
@@ -243,7 +243,7 @@ class TestBrowseOnlyMode(unittest.TestCase):
         (root / "config.yaml").write_text(CFG.format(root=root))
         for p in ("rec/main", "events", "det"):
             (root / p).mkdir(parents=True, exist_ok=True)
-        os.environ["TVW_WEB_PASSWORD"] = "wpw"
+        os.environ["RKNN_WEB_PASSWORD"] = "wpw"
         cfg = config.load(root / "config.yaml", root / "nope.yaml",
                           require_password=False)
         app = create_app(cfg)
@@ -251,7 +251,7 @@ class TestBrowseOnlyMode(unittest.TestCase):
         self.c = app.test_client()
 
     def tearDown(self):
-        os.environ.pop("TVW_WEB_PASSWORD", None)
+        os.environ.pop("RKNN_WEB_PASSWORD", None)
         self.tmp.cleanup()
 
     def auth(self):

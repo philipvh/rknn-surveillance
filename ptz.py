@@ -76,7 +76,7 @@ class UrllibTransport:
 
     def get(self, url, params, timeout):
         full = f"{url}?{urlencode(params)}"
-        req = urllib.request.Request(full, headers={"User-Agent": "tvw-ptz/1"})
+        req = urllib.request.Request(full, headers={"User-Agent": "rknn-ptz/1"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
 

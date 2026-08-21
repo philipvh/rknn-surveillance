@@ -13,7 +13,7 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 
-# phase0_survey.sh -- Phase 0 survey for the TVW camera rebuild.
+# phase0_survey.sh -- Phase 0 survey for a new install.
 #
 # Probes the Foscam SD2X, the Rock 5B's GPIO and clock, the disk, and the
 # site's internet, and writes a report. Read-only by default: it will NOT
@@ -54,7 +54,7 @@ hr()  { printf '\n== %s %s\n' "$1" "$(printf '=%.0s' $(seq 1 $((66-${#1}))))"; }
 note() { printf '   %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
-echo "TVW camera rebuild -- Phase 0 survey"
+echo "RKNN surveillance -- Phase 0 survey"
 echo "run at : $(date -Is)"
 echo "on     : $(uname -srm) / $(hostname)"
 echo "camera : ${HOST} (user ${USER_NAME})"

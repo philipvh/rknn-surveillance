@@ -27,13 +27,13 @@ import doctor  # noqa: E402
 
 class TestDoctor(unittest.TestCase):
     def run_doctor(self, *argv):
-        os.environ["TVW_CAMERA_PASSWORD"] = "x"
+        os.environ["RKNN_CAMERA_PASSWORD"] = "x"
         buf = io.StringIO()
         try:
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
                 rc = doctor.main(list(argv))
         finally:
-            os.environ.pop("TVW_CAMERA_PASSWORD", None)
+            os.environ.pop("RKNN_CAMERA_PASSWORD", None)
         return rc, buf.getvalue()
 
     def test_it_runs_without_a_camera_and_does_not_raise(self):

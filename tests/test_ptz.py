@@ -341,8 +341,8 @@ class TestCLI(Base):
         super().setUp()
         import os
         self.root = Path(self.tmp.name)
-        os.environ["TVW_CONFIG"] = str(self.root / "config.yaml")
-        os.environ["TVW_SECRETS"] = str(self.root / "secrets.yaml")
+        os.environ["RKNN_CONFIG"] = str(self.root / "config.yaml")
+        os.environ["RKNN_SECRETS"] = str(self.root / "secrets.yaml")
         cam = self.cam
         self._real_transport = ptz.UrllibTransport
         ptz.UrllibTransport = lambda: cam
@@ -351,8 +351,8 @@ class TestCLI(Base):
     def _restore(self):
         import os
         ptz.UrllibTransport = self._real_transport
-        os.environ.pop("TVW_CONFIG", None)
-        os.environ.pop("TVW_SECRETS", None)
+        os.environ.pop("RKNN_CONFIG", None)
+        os.environ.pop("RKNN_SECRETS", None)
 
     def run_cli(self, *argv):
         import io, contextlib, ptz_cli

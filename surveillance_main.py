@@ -56,7 +56,7 @@ def setup_logging():
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="TVW camera surveillance")
+    ap = argparse.ArgumentParser(description="RKNN surveillance")
     ap.add_argument("--no-record", action="store_true",
                     help="run detection, PTZ and the panel but write no video. "
                          "For bench testing, and for a board whose disk is too "

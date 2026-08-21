@@ -85,7 +85,7 @@ def derive_key(psk):
         psk = psk.encode("utf-8")
     if not psk:
         raise LinkError("no pre-shared key configured for the radio link")
-    return hashlib.sha256(b"tvw-link-v1|" + psk).digest()
+    return hashlib.sha256(b"rknn-link-v1|" + psk).digest()
 
 
 def _nonce(counter, direction):

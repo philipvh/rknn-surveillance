@@ -47,7 +47,7 @@ class FakePTZ:
 
 class TestShippedConfig(unittest.TestCase):
     def setUp(self):
-        os.environ["TVW_CAMERA_PASSWORD"] = "x"
+        os.environ["RKNN_CAMERA_PASSWORD"] = "x"
         self.cfg = config.load(ROOT / "config.yaml", ROOT / "does-not-exist.yaml")
         self.tmp = tempfile.TemporaryDirectory()
         self.ptz = FakePTZ()
@@ -65,7 +65,7 @@ class TestShippedConfig(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
-        os.environ.pop("TVW_CAMERA_PASSWORD", None)
+        os.environ.pop("RKNN_CAMERA_PASSWORD", None)
 
     def advance(self, seconds, step=0.1):
         end = self.now + seconds

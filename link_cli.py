@@ -44,7 +44,7 @@ def cmd_genkey(args):
     print("Add to secrets.yaml at BOTH ends, and nowhere else:\n")
     print("link:")
     print(f'  psk: "{key}"')
-    print("\nThe far end can also take it as TVW_LINK_PSK.")
+    print("\nThe far end can also take it as RKNN_LINK_PSK.")
     return 0
 
 
@@ -125,7 +125,7 @@ def cmd_drain(args):
 
 def cmd_decode(args):
     cfg = config.load(require_password=False)
-    psk = cfg.link_psk or os.environ.get("TVW_LINK_PSK")
+    psk = cfg.link_psk or os.environ.get("RKNN_LINK_PSK")
     if not psk:
         print("no pre-shared key configured", file=sys.stderr)
         return 2

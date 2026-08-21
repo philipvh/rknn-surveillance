@@ -24,6 +24,9 @@
 set -euo pipefail
 
 DEV="${1:-}"
+# The mountpoint and label keep their original names: renaming them means
+# unmounting a live volume, editing fstab and moving the recordings, for no
+# functional gain. Override with MOUNT= and LABEL= on a fresh board.
 MOUNT="${MOUNT:-/mnt/tvw-data}"
 OWNER="${OWNER:-radxa}"
 

@@ -26,8 +26,8 @@
 # ends with a running service either way rather than another round trip.
 set -uo pipefail
 
-UNIT=/etc/systemd/system/tvw-surveillance.service
-SERVICE=tvw-surveillance
+UNIT=/etc/systemd/system/rknn-surveillance.service
+SERVICE=rknn-surveillance
 
 [ -f "$UNIT" ] || { echo "!! $UNIT not found -- run ./install.sh first"; exit 1; }
 
@@ -54,7 +54,7 @@ s = open(p).read()
 s = re.sub(r'^ProtectHome=.*$', 'ProtectHome=tmpfs', s, count=1, flags=re.M)
 if 'BindPaths=' not in s:
     s = s.replace('ProtectHome=tmpfs',
-                  'ProtectHome=tmpfs\nBindPaths=/home/radxa/tvw_surveillance', 1)
+                  'ProtectHome=tmpfs\nBindPaths=/home/radxa/rknn-surveillance', 1)
 open(p, 'w').write(s)
 PYEOF
 
@@ -80,7 +80,7 @@ PYEOF
   fi
 fi
 
-PORT=$(cd /home/radxa/tvw_surveillance && python3 -c \
+PORT=$(cd /home/radxa/rknn-surveillance && python3 -c \
   "import config; print(config.load(require_password=False)._get('web','port',default=8080))" \
   2>/dev/null || echo 8080)
 echo

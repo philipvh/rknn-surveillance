@@ -1,9 +1,13 @@
-# rock5b-camera
+# rknn-surveillance
 
-Vandalism-detection camera for a tennis club, on a Radxa Rock 5B: YOLOv10
-person and vehicle detection on the RK3588 NPU, PTZ control of a Foscam dome,
-a PIR contact on GPIO, and a wall panel that works on an Android tablet old
-enough to be stuck on an ES5 browser.
+Offline surveillance for a Rockchip NPU board: YOLOv10 detection through the
+RKNN runtime, PTZ control, a PIR contact on GPIO, and a wall panel that works
+on an Android tablet old enough to be stuck on an ES5 browser.
+
+Developed on a Radxa Rock 5B (RK3588) against a tennis club's vandalism
+problem, but nothing here is specific to either. The model is a config value,
+the board only has to run the RKNN runtime, and the site's name, trigger
+classes and schedule are all settings.
 
 It runs offline. The club has no internet, so there is no cloud, no app and no
 account — the panel is served from the board over the club LAN, and an optional
@@ -50,8 +54,8 @@ board, these parts are worth stealing:
 ## Getting it running
 
 ```bash
-git clone <this repo> rock5b-camera
-cd rock5b-camera
+git clone <this repo> rknn-surveillance
+cd rknn-surveillance
 
 cp config.local.example.yaml config.local.yaml   # your camera's address
 cp secrets.example.yaml secrets.yaml             # camera + panel passwords

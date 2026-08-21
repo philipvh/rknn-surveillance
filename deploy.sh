@@ -44,14 +44,14 @@ for a in "$@"; do
   esac
 done
 
-REMOTE_DIR="${REMOTE_DIR:-/home/radxa/tvw_surveillance}"
+REMOTE_DIR="${REMOTE_DIR:-/home/radxa/rknn-surveillance}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IGNORE="${HERE}/.deployignore"
 SERVICE="$(basename "$REMOTE_DIR" | tr '_' '-')"
 POLL_S="${POLL_S:-2}"
 
 # ---------------------------------------------------------------- ssh reuse
-CTL_DIR="${TMPDIR:-/tmp}/.tvw-deploy-$$"
+CTL_DIR="${TMPDIR:-/tmp}/.rknn-deploy-$$"
 mkdir -p "$CTL_DIR"; chmod 700 "$CTL_DIR"
 CTL="${CTL_DIR}/ctl"
 SSH_OPTS=(-o ControlMaster=auto -o "ControlPath=${CTL}" -o ControlPersist=600)
@@ -77,8 +77,8 @@ if [ "$SETUP" = 1 ]; then
   echo
   echo "      echo \"\$USER ALL=(root) NOPASSWD: /bin/systemctl restart ${SERVICE}.service, \\"
   echo "            /bin/systemctl stop ${SERVICE}.service, /bin/systemctl start ${SERVICE}.service\" \\"
-  echo "        | sudo tee /etc/sudoers.d/tvw-deploy"
-  echo "      sudo chmod 440 /etc/sudoers.d/tvw-deploy"
+  echo "        | sudo tee /etc/sudoers.d/rknn-deploy"
+  echo "      sudo chmod 440 /etc/sudoers.d/rknn-deploy"
   echo
   echo "    Then --watch --restart runs unattended."
   exit 0

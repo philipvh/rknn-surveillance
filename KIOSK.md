@@ -1,8 +1,8 @@
 # The wall panel (Galaxy Tab S)
 
-The panel is served by the `tvw-surveillance` service itself, at
+The panel is served by the `rknn-surveillance` service itself, at
 `http://<rock5b>:8080/`. Log in with the user in `config.yaml`
-(`web.auth_user`, default `tvw`) and the password from `secrets.yaml`.
+(`web.auth_user`, default `admin`) and the password from `secrets.yaml`.
 
 It runs inside the surveillance process on purpose: it then drives the same
 PTZ object as the automatic controller, so every button obeys the same

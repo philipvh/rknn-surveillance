@@ -68,7 +68,7 @@ class GpiodV2Backend:
         self._line = int(line)
         path = chip if str(chip).startswith("/") else f"/dev/{chip}"
         self._req = gpiod.request_lines(
-            path, consumer="tvw-trigger",
+            path, consumer="rknn-trigger",
             config={self._line: gpiod.LineSettings(
                 direction=Direction.INPUT,
                 bias=bias_map.get(bias, Bias.PULL_UP))})
@@ -104,7 +104,7 @@ class GpiodV1Backend:
             # pull-up resistor is required, so say so rather than fail quietly.
             log.warning("this libgpiod has no bias flags -- fit an external "
                         "%s resistor, or the line will float", bias)
-        self._line_obj.request(consumer="tvw-trigger",
+        self._line_obj.request(consumer="rknn-trigger",
                                type=gpiod.LINE_REQ_DIR_IN, flags=flags)
 
     def read(self):

@@ -25,7 +25,7 @@ set -uo pipefail
 echo "==> Free before: $(df -h / | awk 'NR==2{print $4}')"
 
 # Both units point at /home/radxa/rknn_yolov10 and belong to the try-out.
-# media-browser held port 8080; tvw_surveillance can move onto it afterwards.
+# media-browser held port 8080; this service can move onto it afterwards.
 for svc in media-browser surveillance; do
   unit="/etc/systemd/system/${svc}.service"
   if [ -f "$unit" ]; then
@@ -52,6 +52,6 @@ done
 echo "==> Free after:  $(df -h / | awk 'NR==2{print $4}')"
 echo
 echo "Port 8080 is free now. Next, as radxa:"
-echo "    cd ~/tvw_surveillance && ./run_test.sh stop && ./install.sh"
-echo "which installs tvw-surveillance under systemd (enabled at boot) and"
+echo "    cd ~/rknn-surveillance && ./run_test.sh stop && ./install.sh"
+echo "which installs rknn-surveillance under systemd (enabled at boot) and"
 echo "vacuums the journal."

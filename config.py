@@ -12,7 +12,7 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 
-"""Configuration loading for the TVW camera system.
+"""Configuration loading for the RKNN surveillance system.
 
 One source of truth: config.yaml, with the camera password kept separately in
 secrets.yaml so it never lands in git or in a support paste. Replaces the RTSP
@@ -227,6 +227,15 @@ class Config:
         return self._link_psk
 
     @property
+    def site_name(self) -> str:
+        """What this installation calls itself, shown in the panel.
+
+        The club's name is configuration, not source: the same code runs at
+        the next site under a different one.
+        """
+        return str(self._get("web", "title", default="RKNN surveillance"))
+
+    @property
     def web_auth_required(self) -> bool:
         return bool(self.web.get("auth_required", True))
 
@@ -268,9 +277,9 @@ def load(config_path=None, secrets_path=None, require_password=True,
     this board, and the secrets. Only the first is ever overwritten by a
     deploy, so editing the camera's address on the board sticks.
     """
-    config_path = Path(config_path or os.environ.get("TVW_CONFIG", DEFAULT_CONFIG))
-    secrets_path = Path(secrets_path or os.environ.get("TVW_SECRETS", DEFAULT_SECRETS))
-    local_path = Path(local_path or os.environ.get("TVW_LOCAL", DEFAULT_LOCAL))
+    config_path = Path(config_path or os.environ.get("RKNN_CONFIG", DEFAULT_CONFIG))
+    secrets_path = Path(secrets_path or os.environ.get("RKNN_SECRETS", DEFAULT_SECRETS))
+    local_path = Path(local_path or os.environ.get("RKNN_LOCAL", DEFAULT_LOCAL))
 
     if not config_path.exists():
         raise ConfigError(f"config file not found: {config_path}")
@@ -288,11 +297,11 @@ def load(config_path=None, secrets_path=None, require_password=True,
                 f"Run: chmod 600 {secrets_path}")
         raw = _deep_merge(raw, yaml.safe_load(secrets_path.read_text()) or {})
 
-    password = os.environ.get("TVW_CAMERA_PASSWORD") or \
+    password = os.environ.get("RKNN_CAMERA_PASSWORD") or \
         (raw.get("camera") or {}).get("password") or ""
-    web_password = os.environ.get("TVW_WEB_PASSWORD") or \
+    web_password = os.environ.get("RKNN_WEB_PASSWORD") or \
         (raw.get("web") or {}).get("password") or ""
-    link_psk = os.environ.get("TVW_LINK_PSK") or \
+    link_psk = os.environ.get("RKNN_LINK_PSK") or \
         (raw.get("link") or {}).get("psk") or ""
 
     # Keep secrets out of the parsed tree so a stray dump can't leak them.
@@ -309,7 +318,7 @@ def load(config_path=None, secrets_path=None, require_password=True,
     if require_password and not password:
         raise ConfigError(
             f"no camera password. Copy secrets.example.yaml to "
-            f"{secrets_path.name}, chmod 600 it, or set TVW_CAMERA_PASSWORD.")
+            f"{secrets_path.name}, chmod 600 it, or set RKNN_CAMERA_PASSWORD.")
 
     # Touch the properties that would otherwise fail late, at 3am, in a service.
     cfg.camera_host, cfg.camera_port, cfg.camera_user, cfg.rtsp_port

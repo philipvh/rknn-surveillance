@@ -53,7 +53,7 @@ class Base(unittest.TestCase):
         self.cfg_p.write_text(BASE)
         self.sec_p.write_text(f'camera:\n  password: "{PW}"\n')
         self.sec_p.chmod(0o600)
-        os.environ.pop("TVW_CAMERA_PASSWORD", None)
+        os.environ.pop("RKNN_CAMERA_PASSWORD", None)
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -84,11 +84,11 @@ class TestPassword(Base):
         self.assertNotIn(PW, repr(cfg.raw))
 
     def test_env_var_overrides_secrets_file(self):
-        os.environ["TVW_CAMERA_PASSWORD"] = "from-env"
+        os.environ["RKNN_CAMERA_PASSWORD"] = "from-env"
         try:
             self.assertIn("from-env", self.load().rtsp_url("sub"))
         finally:
-            del os.environ["TVW_CAMERA_PASSWORD"]
+            del os.environ["RKNN_CAMERA_PASSWORD"]
 
     def test_missing_password_is_a_startup_error(self):
         self.sec_p.unlink()

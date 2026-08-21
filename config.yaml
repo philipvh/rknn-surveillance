@@ -1,4 +1,4 @@
-# TVW camera rebuild -- single source of truth.
+# RKNN surveillance -- single source of truth.
 #
 # The camera password does NOT live here. Put it in secrets.yaml (mode 600),
 # which is gitignored. Copy secrets.example.yaml to get started.
@@ -92,6 +92,8 @@ paths:
   events_root: events
 
 web:
+  # Shown in the panel and in alerts. Set it to the site's own name.
+  title: "RKNN surveillance"
   bind: 0.0.0.0
   port: 8080
   # The panel is served from inside the surveillance process so it drives the
@@ -108,7 +110,7 @@ web:
 
   # Basic auth. Password lives in secrets.yaml under web.password.
   auth_required: true
-  auth_user: tvw
+  auth_user: admin
 
   # Held PTZ buttons refresh this often. Must be comfortably under
   # ptz.move_deadline_s or the camera will stutter.

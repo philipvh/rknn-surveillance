@@ -80,8 +80,12 @@ class Notifier:
 
 class Receiver:
     def __init__(self, key, transport, notifier, state_path,
-                 heartbeat_missed_alarm=2, clock=time.time):
+                 heartbeat_missed_alarm=2, clock=time.time,
+                 site_name="RKNN surveillance"):
         self.key = key
+        # What the alerts call themselves. The far end runs somewhere else
+        # entirely, so it cannot read the site's config -- it is told.
+        self.site_name = site_name
         self.transport = transport
         self.notifier = notifier
         self.state_path = Path(state_path)
@@ -139,7 +143,7 @@ class Receiver:
         elif msg_type == link.HEARTBEAT:
             self._on_heartbeat(counter, link.unpack_heartbeat(body))
         elif msg_type == link.TEST:
-            self.notifier.push("TVW camera: test", "Test message received.",
+            self.notifier.push(f"{self.site_name}: test", "Test message received.",
                                priority="low", tags="white_check_mark")
         else:
             log.info("ignoring message type %s", msg_type)
@@ -164,7 +168,7 @@ class Receiver:
                   f"Zone {a['zone']}, {a['duration_s']:.0f}s, "
                   f"confidence {a['confidence']:.0%}."
                   + ("" if a["pir"] else " (camera only, PIR did not agree)"))
-        self.notifier.push("TVW camera: someone is at the club", detail,
+        self.notifier.push(f"{self.site_name}: someone is at the club", detail,
                            priority="high", tags="rotating_light")
         self.state["last_alert"] = self._clock()
 
@@ -175,15 +179,15 @@ class Receiver:
                  h["events_today"], h["disk_percent"], h["uptime_h"],
                  "" if not h["camera_bad"] else ", CAMERA UNHEALTHY")
         if self.state.pop("heartbeat_alarm_sent", None):
-            self.notifier.push("TVW camera: back online",
+            self.notifier.push(f"{self.site_name}: back online",
                                "Heartbeats have resumed.", priority="default",
                                tags="white_check_mark")
         if h["disk_low"]:
-            self.notifier.push("TVW camera: disk nearly full",
+            self.notifier.push(f"{self.site_name}: disk nearly full",
                                f"Disk at {h['disk_percent']}%.",
                                priority="default", tags="floppy_disk")
         if h["camera_bad"]:
-            self.notifier.push("TVW camera: camera unhealthy",
+            self.notifier.push(f"{self.site_name}: camera unhealthy",
                                "The recorder is not getting frames.",
                                priority="high", tags="warning")
 
@@ -199,7 +203,7 @@ class Receiver:
         if self.state.get("heartbeat_alarm_sent"):
             return False
         self.notifier.push(
-            "TVW camera: NO SIGNAL",
+            f"{self.site_name}: NO SIGNAL",
             f"No heartbeat for {missed:.1f} days. The system at the club may "
             f"be off, broken, or out of range.",
             priority="high", tags="warning")
@@ -230,7 +234,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", default="/dev/ttyUSB0")
     ap.add_argument("--baud", type=int, default=115200)
-    ap.add_argument("--psk", help="pre-shared key (or set TVW_LINK_PSK)")
+    ap.add_argument("--psk", help="pre-shared key (or set RKNN_LINK_PSK)")
     ap.add_argument("--ntfy-server", default="https://ntfy.sh")
     ap.add_argument("--ntfy-topic")
     ap.add_argument("--state", default="receiver-state.json")
@@ -241,9 +245,9 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(message)s")
     import os
-    psk = args.psk or os.environ.get("TVW_LINK_PSK")
+    psk = args.psk or os.environ.get("RKNN_LINK_PSK")
     if not psk:
-        print("no pre-shared key: pass --psk or set TVW_LINK_PSK",
+        print("no pre-shared key: pass --psk or set RKNN_LINK_PSK",
               file=sys.stderr)
         return 2
     if not args.ntfy_topic:

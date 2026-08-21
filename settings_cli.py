@@ -20,7 +20,7 @@ network that turned out not to include you, or a settings file that needs
 reading before anything is changed.
 
     ./settings_cli.py show                    what is set, and what it means
-    ./settings_cli.py passwd tvw              set the login (prompts, no echo)
+    ./settings_cli.py passwd admin            set the login (prompts, no echo)
     ./settings_cli.py open                    no password from anywhere
     ./settings_cli.py trusted 192.168.1.0/24  no password from there
     ./settings_cli.py password                require a password everywhere
@@ -71,7 +71,7 @@ def cmd_show(cfg, s, args):
     if s.has_credentials():
         print(f"login          {s.web_user!r}   [set from the panel, PBKDF2]")
     else:
-        who = (cfg.web or {}).get("auth_user", "tvw")
+        who = (cfg.web or {}).get("auth_user", "admin")
         print(f"login          {who!r}   (config.yaml + secrets.yaml)")
 
     if s.overridden("trigger_classes"):
@@ -84,7 +84,7 @@ def cmd_show(cfg, s, args):
 
 
 def cmd_passwd(cfg, s, args):
-    user = args.user or s.web_user or (cfg.web or {}).get("auth_user", "tvw")
+    user = args.user or s.web_user or (cfg.web or {}).get("auth_user", "admin")
     pw = args.password
     if pw is None:
         pw = getpass.getpass(f"New password for {user!r}: ")

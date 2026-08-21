@@ -44,16 +44,19 @@ log = logging.getLogger("web")
 
 BASE_DIR = Path(__file__).resolve().parent
 # Our own multipart boundary for snapshot mode.
-BOUNDARY = "tvwframe"
+BOUNDARY = "rknnframe"
 # ffmpeg's mpjpeg muxer writes its own, and the Content-Type must match it or
 # the browser sees one endless malformed part. Verified against ffmpeg 8.
 FFMPEG_BOUNDARY = "ffmpeg"
 
 
-def _unauthorised():
+def _unauthorised(realm="RKNN surveillance"):
+    # The realm is what the browser's password box is labelled with, so it
+    # should say which installation is asking.
+    safe = str(realm).replace('"', "'")
     return Response(
         "Authentication required.", 401,
-        {"WWW-Authenticate": 'Basic realm="TVW camera"'})
+        {"WWW-Authenticate": 'Basic realm="%s"' % safe})
 
 
 def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
@@ -68,6 +71,11 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
     # incident needs, and the panel offers live video instead.
     roots = {"events": cfg.events_root.resolve(),
              "detections": cfg.detections_root.resolve()}
+
+    @app.context_processor
+    def _site():
+        # Every template gets it, so a new page cannot forget to pass it.
+        return {"site_name": cfg.site_name}
 
     # ------------------------------------------------------------------ auth
     # Deriving a PBKDF2 hash costs about 100 ms on the board, and Basic Auth
@@ -109,7 +117,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             log.warning("web.auth_required is set but no password is "
                         "configured; refusing every request")
             return False
-        return _same(user, web.get("auth_user", "tvw")) and _same(pw, want_pw)
+        return _same(user, web.get("auth_user", "admin")) and _same(pw, want_pw)
 
     def _auth_mode():
         """password | trusted | open. The panel overrides the config."""
@@ -151,7 +159,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         @functools.wraps(fn)
         def wrapper(*a, **kw):
             if not check_auth():
-                return _unauthorised()
+                return _unauthorised(cfg.site_name)
             return fn(*a, **kw)
         return wrapper
 
@@ -415,7 +423,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
     def _current_user():
         if settings is not None and settings.has_credentials():
             return settings.web_user
-        return web.get("auth_user", "tvw")
+        return web.get("auth_user", "admin")
 
     def _creds_from_panel():
         return settings is not None and settings.has_credentials()

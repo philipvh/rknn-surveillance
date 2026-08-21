@@ -39,6 +39,8 @@ MARK = {OK: "  ok  ", WARN: " warn ", FAIL: " FAIL ", SKIP: " skip "}
 BASE = Path(__file__).resolve().parent
 
 
+TITLE = "RKNN surveillance"
+
 class Doctor:
     def __init__(self, quiet=False):
         self.quiet = quiet
@@ -381,7 +383,7 @@ def main(argv=None):
     sys.path.insert(0, str(BASE))
     d = Doctor(quiet=args.quiet)
     if not args.quiet:
-        print(f"TVW camera doctor -- {dt.datetime.now():%Y-%m-%d %H:%M:%S}")
+        print(f"{TITLE} doctor -- {dt.datetime.now():%Y-%m-%d %H:%M:%S}")
 
     cfg = check_config(d)
     if not args.camera:
