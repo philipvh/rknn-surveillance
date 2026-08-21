@@ -1,0 +1,21 @@
+# Board-specific settings. Copy to config.local.yaml on the board.
+#
+#   cp config.local.example.yaml config.local.yaml
+#
+# config.yaml is part of the deploy and gets overwritten every time code is
+# synced. This file is not, so anything particular to one installation belongs
+# here: it survives ./deploy.sh --watch clobbering config.yaml on every save.
+#
+# Only list what differs -- these are merged over config.yaml, key by key.
+
+camera:
+  host: 192.168.1.50
+  http_port: 88
+  # rtsp_port: 554        # only if RTSP is not on the CGI port
+
+# trigger_input:
+#   chip: gpiochip4       # from gpioinfo on this board
+#   line: 17
+
+# ptz:
+#   scan_presets: [Home, Court1, Court2, Gate]

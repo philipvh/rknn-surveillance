@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="color:#6d8378">{{ root_key }} / {{ cwd }}</p>
+<ul>
+  {% if parent_href %}<li><a href="{{ parent_href }}">&uarr; up</a></li>{% endif %}
+  {% for it in items %}
+  <li><a href="{{ it.href }}">{{ it.name }}<span class="size">{{ it.size }}</span></a></li>
+  {% endfor %}
+</ul>
+{% endblock %}

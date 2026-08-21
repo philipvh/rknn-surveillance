@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block content %}
+<p style="color:#6d8378">{{ filename }}</p>
+{% if kind == "image" %}
+  <img src="{{ file_url }}" alt="{{ filename }}" style="max-width:100%;height:auto">
+{% elif kind == "video" %}
+  <video controls preload="metadata" playsinline style="max-width:100%;height:auto">
+    <source src="{{ file_url }}" type="video/mp4">
+    <a href="{{ file_url }}">Download {{ filename }}</a>
+  </video>
+{% else %}
+  <p><a href="{{ file_url }}">Download {{ filename }}</a></p>
+{% endif %}
+{% endblock %}

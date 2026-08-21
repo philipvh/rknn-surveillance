@@ -1,0 +1,37 @@
+TVW camera
+Copyright 2026 Philip van Houtte, magicview.tv, the Netherlands
+
+Licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+
+SECURITY DISCLAIMER
+-------------------
+
+This software operates surveillance recording, motion and object detection,
+camera motor control and alerting. It is offered as an aid, not as a guarantee.
+It can and will miss events, record nothing, raise false alarms, stop without
+warning, lose footage, or move a camera away from the thing worth watching.
+
+Nothing in this software should be relied upon for the protection of people or
+property, and no part of it constitutes a security service. Operating a camera
+that records people carries obligations under the GDPR and under national law;
+meeting them is the responsibility of whoever deploys it, not of the author.
+
+As set out in sections 7 and 8 of the License, the software is provided on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, and no liability
+is accepted for any loss, damage, injury, prosecution or claim arising from its
+use or from any inability to use it -- including any failure to detect, record,
+retain or report an event.
+
+
+THIRD-PARTY COMPONENTS
+----------------------
+
+yolov10.py is derived from the YOLOv10 example in Rockchip's rknn_model_zoo
+(https://github.com/airockchip/rknn_model_zoo), Copyright (c) Rockchip
+Electronics Co., Ltd., licensed under the Apache License, Version 2.0. The file
+carries a notice recording that it has been modified.
+
+The YOLOv10 model weights, the RKNN toolkit and runtime, ffmpeg, OpenCV, Flask
+and PyTorch are each the property of their respective owners and are used here
+under their own licences.

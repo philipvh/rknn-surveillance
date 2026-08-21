@@ -1,0 +1,261 @@
+# TVW camera rebuild -- single source of truth.
+#
+# The camera password does NOT live here. Put it in secrets.yaml (mode 600),
+# which is gitignored. Copy secrets.example.yaml to get started.
+
+camera:
+  host: 192.168.1.50
+  http_port: 88            # CGI/web port. Foscam ships on 88, not 80
+  # RTSP port, if it differs from the CGI port. Foscam serves RTSP on the HTTP
+  # port unless one is configured; most other cameras use 554. Omit to reuse
+  # http_port.
+  # rtsp_port: 554
+  user: admin
+  # Stream paths as served by the SD2X (see the manual, section 3.4)
+  main_path: videoMain     # 1080p -- the footage you hand to someone
+  sub_path: videoSub       # low-res -- detection, and the long archive
+
+detection:
+  source: sub              # which stream the NPU watches: sub | main
+  model: ./model/yolov10.rknn
+  target: rk3588
+  # Pad to square rather than stretch 16:9 into 1:1. Measured on the bench
+  # camera: squashing found 2 people where letterboxing found 3.
+  letterbox: true
+  target_fps: 2
+  conf_threshold: 0.6
+  # Compared against the COCO labels with surrounding whitespace stripped --
+  # the label list in yolov10.py has trailing spaces on several entries.
+  trigger_classes: [person, bicycle, car, motorbike, bus, truck]
+  snapshot_interval_s: 1.0
+
+trigger:
+  quiet_period_s: 15.0     # how long after the last sighting to close the window
+  pre_roll_s: 2.0          # include this much before the first sighting
+  post_roll_s: 15.0        # ...and this much after the last
+  max_duration_min: 10     # force the window shut after this long
+
+recording:
+  segment_seconds: 60
+
+  # Clips are filed when something happens, and the minutes in between are
+  # thrown away. The main stream records continuously as one-minute segments
+  # because a clip cannot have pre-roll unless the camera was already
+  # recording when the trigger fired -- but in the ready state each new
+  # segment lets the previous one go.
+  #
+  # The trade: nothing survives a night on which the detector saw nothing.
+  tiers:
+    - name: main
+      stream: main
+      path: recordings/main
+      # A backstop only. The capture state machine does the real pruning; this
+      # catches anything it somehow misses.
+      max_age_minutes: 120
+      protected: false
+    - name: detections
+      stream: null            # a JPEG a second, while triggered
+      path: detections
+      max_age_days: 365
+      protected: false
+    - name: events
+      stream: null            # one concatenated clip per incident
+      path: events
+      max_age_days: 730
+      protected: true         # never deleted to make room
+
+  annotated_max_frames: 1200
+
+# Two states: ready and triggered. An event makes it triggered; another event
+# extends it (see controller.quiet_period_s); a minute with no event returns
+# it to ready, at which point the incident's segments are concatenated into
+# one clip and the sources removed.
+capture:
+  ready_keep_clips: 1         # completed segments held as pre-roll while ready
+  jpeg_interval_s: 1.0        # while triggered, only for frames with a trigger
+  delete_sources_after_concat: true
+  # Ceiling on a single cut. An incident is already closed at max_hold_s, but
+  # the quiet period runs past it and a recovered window is unbounded.
+  max_clip_seconds: 600.0
+  # A playable 2 fps clip with the boxes drawn on, beside each event clip.
+  # Small (about 8% of the full-resolution file) and far quicker to open on a
+  # tablet, which is why the browser offers it as the default video.
+  annotated_clip: true
+
+retention:
+  target_free_percent: 20  # keep at least this much of the disk free
+  check_interval_s: 300
+
+paths:
+  recordings_root: recordings
+  detections_root: detections
+  events_root: events
+
+web:
+  bind: 0.0.0.0
+  port: 8080
+  # The panel is served from inside the surveillance process so it drives the
+  # same PTZ object -- same deadline watchdog, same motor budget. There is no
+  # way to move the camera from the panel that bypasses the safety logic.
+
+  # Built for a Galaxy Tab S whose browser stopped updating: ES5 only, no
+  # build step, XHR rather than fetch, flexbox rather than grid, and MJPEG
+  # rather than WebRTC.
+  stream_mode: snapshot      # snapshot | ffmpeg
+  stream_fps: 3              # snapshot mode: how often to refresh
+  ffmpeg_scale: 960          # ffmpeg mode: output width
+  idle_fps: 1                # slower refresh when nobody is touching it
+
+  # Basic auth. Password lives in secrets.yaml under web.password.
+  auth_required: true
+  auth_user: tvw
+
+  # Held PTZ buttons refresh this often. Must be comfortably under
+  # ptz.move_deadline_s or the camera will stutter.
+  keepalive_ms: 250
+
+  # How often the stills-and-clips page asks for new frames. It appends
+  # rather than rebuilding, so this is cheap even during an incident.
+  media_poll_ms: 5000
+
+ptz:
+  enabled: true
+  speed: 2                     # 0 = very fast ... 4 = very slow (manual, 5 levels)
+  home_preset: Home
+  # Set these up once through the camera's own web UI, then refer to them by
+  # name. For vandalism the priorities are the courts, the nets and the gates
+  # rather than the clubhouse door.
+  scan_presets: [Home, Court1, Court2, Gate]
+  dwell_s: 4.0                 # how long to sit at each preset during a scan
+  settle_s: 0.5                # ignore detection frames this long after moving
+
+  # A move is continuous: it runs until something stops it. Every move
+  # therefore carries a deadline, and the panel refreshes it while a button is
+  # held. If the refresh stops arriving -- tablet asleep, wifi dropped, process
+  # wedged -- the watchdog stops the camera.
+  move_deadline_s: 0.6
+  watchdog_interval_s: 0.1
+  max_continuous_move_s: 10.0  # hard ceiling even if refreshes keep arriving
+  preset_move_estimate_s: 3.0  # charged to the budget for a goto
+
+  budget:
+    auto_seconds_per_hour: 90
+    manual_seconds_per_hour: 300
+    min_scan_interval_s: 60
+
+  http:
+    timeout_s: 5.0
+    stop_timeout_s: 3.0        # stops get a shorter timeout and more retries
+    stop_retries: 5
+
+# The PIR that already switches the floodlights, read as a dry contact.
+# Find the chip and line with:  gpiodetect  then  gpioinfo
+# Prove the wiring before trusting any of this:  gpiomon <chip> <line>
+trigger_input:
+  enabled: true
+  chip: gpiochip4
+  line: 17
+  # Contact between the line and ground, with the SoC's internal pull-up:
+  # closed contact reads 0, so active_low is true.
+  active_low: true
+  bias: pull-up              # pull-up | pull-down | disabled | as-is
+
+  poll_interval_s: 0.05
+  debounce_s: 0.2            # relay contacts bounce; require a steady reading
+  min_active_s: 0.3          # ignore blips shorter than this
+  stuck_after_s: 1800        # warn if the line never releases (stuck relay)
+
+# When alerting is live. Recording runs regardless -- these windows only gate
+# alerts and, later, the spoken warning. During club hours the courts are full
+# of members and every one of them is a valid person detection.
+schedule:
+  always_armed: false
+  armed:
+    - {days: [mon, tue, wed, thu, fri], from: "22:30", to: "07:30"}
+    - {days: [sat, sun],                from: "21:00", to: "08:30"}
+
+controller:
+  lights_settle_s: 1.5       # PIR switches the floodlights; let exposure catch up
+  quiet_period_s: 60.0       # a minute with no event returns to ready
+  max_hold_s: 600.0
+  max_scan_s: 120.0          # a sweep that overruns this gives up and parks
+  manual_timeout_s: 180.0    # wall panel control expires back to automatic
+  return_timeout_s: 30.0
+  pir_required_to_scan: true
+
+# Four gates, all of which must pass. Nothing is sent yet -- every decision
+# goes to the shadow log, and Phase 6 reads a fortnight of it to decide
+# whether the radio link is worth building.
+alerts:
+  shadow_only: true
+  shadow_root: shadow
+  require_pir: true          # gate 2: the camera and the PIR must agree
+  min_duration_s: 4.0        # gate 3: persistence, not one lucky frame
+  min_sightings: 3
+  min_confidence: 0.7
+  min_interval_s: 300        # gate 4: rate limit
+  max_per_day: 12
+
+# The point-to-point radio out. Nothing is sent while alerts.shadow_only is
+# true -- Phase 6 has to say the volume is acceptable first.
+link:
+  enabled: false
+  transport: file            # file | serial | loopback
+  port: /dev/ttyUSB0         # serial: the USB radio bridge
+  baud: 115200
+  spool_root: link
+
+  require_ack: true
+  ack_timeout_s: 8.0
+  max_attempts: 4
+  # 868 MHz is duty-cycle limited. Compute this properly for the spreading
+  # factor you settle on; at slower settings it is a message every minute or
+  # two, which happens to be the ceiling the alert policy wants anyway.
+  min_tx_interval_s: 90.0
+  poll_interval_s: 1.0
+
+  max_queued: 500
+  max_queue_age_days: 30
+
+  heartbeat_hour: 6          # one "still alive" message a day, local time
+  heartbeat_missed_alarm: 2  # far end raises the alarm after this many missed
+
+health:
+  # No frames for this long means the capture pipeline is wedged. The
+  # watchdog ping stops, and systemd restarts the service.
+  stale_frames_s: 120
+  disk_warn_percent: 90
+  # Where the last-known-good wall time is recorded, so a clock that went
+  # backwards after a power cut is detectable. See the RTC note in the plan.
+  clock_state: state/clock.json
+
+# Phase 9: keep a person roughly framed. Off until everything else is stable.
+# Tuned against oscillation, not for tightness -- a dome that hunts burns the
+# motor budget, blurs the footage, and looks broken rather than watchful.
+tracking:
+  enabled: false
+  dead_zone: 0.25            # fraction of the frame; deliberately generous
+  min_pulse_s: 0.15
+  max_pulse_s: 0.5
+  cooldown_s: 1.5            # settle and re-measure before correcting again
+  confirmations: 2           # the error must agree with itself before moving
+  max_pulses_per_incident: 12
+  min_confidence: 0.7
+  vertical: true
+
+# Phase 9: the spoken warning. Off by default, and gated harder than anything
+# else here -- it is the only part of the system that acts on a person rather
+# than recording one. A voice at 2am is a neighbour complaint waiting to
+# happen, and a voice addressed to a member is worse than no voice at all.
+announce:
+  enabled: false
+  sound: sounds/warning.wav
+  # How the sound gets out. The certain option is a powered speaker on the
+  # Rock 5B's own output. Pushing audio through the camera's Audio Out jack
+  # needs Foscam's two-way talk protocol, which is not a documented CGI call
+  # -- verify against the real camera before relying on it.
+  player_cmd: "aplay -q {file}"
+  require_armed: true        # armed hours only
+  min_confidence: 0.8        # more certain than a recording needs to be
+  min_interval_s: 120
+  max_per_day: 6

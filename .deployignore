@@ -1,0 +1,27 @@
+# Runtime data — the board makes its own.
+recordings/
+detections/
+events/
+shadow/
+link/
+state/
+hls/
+
+# Secrets never travel. Create secrets.yaml on the board.
+secrets.yaml
+
+# Build and editor droppings.
+__pycache__/
+*.pyc
+*.tmp
+.git/
+
+# Survey output from earlier runs.
+phase0_report_*.txt
+phase0_snapshot.jpg
+
+# Board-specific config; never overwritten by a deploy.
+config.local.yaml
+
+# bench-testing pid file
+.run_test.pid

@@ -1,0 +1,296 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+/* ES5-era CSS for the Tab S: flexbox, no grid, no custom properties. */
+#hint { color:#8fa39a; font-size:14px; line-height:1.5; max-width:60em; }
+#hint b { color:#dfe7e1; font-weight:normal; }
+.note { background:#131c18; border:1px solid #24322c; padding:10px 12px;
+  margin:12px 0; font-size:13px; color:#8fa39a; }
+.note.ok { border-color:#2f6a53; color:#9fd8bf; }
+h3 { margin:20px 0 8px; font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:#6d8378; }
+.grid { display:-webkit-flex; display:flex; -webkit-flex-wrap:wrap;
+  flex-wrap:wrap; }
+/* Big touch targets: this is operated with a thumb on a wall-mounted tablet. */
+.cls { -webkit-flex:0 0 auto; flex:0 0 auto; width:200px; margin:0 8px 8px 0;
+  display:-webkit-flex; display:flex; -webkit-align-items:center;
+  align-items:center; padding:11px 10px; background:#131c18;
+  border:1px solid #24322c; font-size:15px; color:#b9c8c0; }
+.cls input { width:20px; height:20px; margin:0 10px 0 0; }
+.cls.on { border-color:#3f8a6c; background:#17251f; color:#dfe7e1; }
+#more { display:none; }
+#more.show { display:block; }
+#moretoggle { font-size:14px; color:#62bb99; background:none; border:0;
+  padding:8px 0; text-decoration:underline; }
+#actions { position:-webkit-sticky; position:sticky; bottom:0;
+  background:#0d1310; border-top:1px solid #24322c; padding:12px 0;
+  margin-top:16px; }
+#actions button { font-size:16px; font-weight:bold; padding:14px 22px;
+  background:#2f6a53; color:#fff; border:1px solid #3f8a6c; margin-right:10px; }
+#actions button.plain { background:#1b2721; color:#8fa39a;
+  border-color:#2f3f38; font-weight:normal; }
+#count { color:#8fa39a; font-size:14px; }
+#settabs { display:-webkit-flex; display:flex; margin:0 0 16px 0;
+  border-bottom:1px solid #24322c; }
+#settabs a { font-size:15px; font-weight:bold; padding:11px 18px;
+  color:#8fa39a; text-decoration:none; border:1px solid transparent;
+  border-bottom:0; }
+#settabs a.on { color:#dfe7e1; background:#17251f; border-color:#2f3f38; }
+.note.err { border-color:#7a3b2a; color:#e0a64a; }
+.field { margin:0 0 12px 0; max-width:26em; }
+.field label { display:block; font-size:13px; color:#8fa39a; margin-bottom:5px; }
+.field input { width:100%; font-size:17px; padding:12px 10px;
+  background:#0f1714; color:#dfe7e1; border:1px solid #2f3f38; }
+.field .sub { display:block; font-size:12px; color:#6d8378; margin-top:4px; }
+code { color:#9fd8bf; font-family:monospace; }
+.note.warn { border-color:#7a5a2a; color:#e0a64a; background:#1a1510; }
+.mode { display:-webkit-flex; display:flex; margin:0 0 10px 0; padding:12px;
+  background:#131c18; border:1px solid #24322c; max-width:46em;
+  font-size:14px; color:#b9c8c0; line-height:1.5; }
+.mode input { width:20px; height:20px; margin:2px 12px 0 0;
+  -webkit-flex:0 0 auto; flex:0 0 auto; }
+.mode.on { border-color:#3f8a6c; background:#17251f; color:#dfe7e1; }
+.mode b { color:#dfe7e1; font-weight:normal; }
+</style>
+
+<div id="settabs">
+  <a href="{{ url_for('settings_page') }}"
+     class="{% if tab == 'classes' %}on{% endif %}">Categories</a>
+  <a href="{{ url_for('settings_credentials') }}"
+     class="{% if tab == 'credentials' %}on{% endif %}">Credentials</a>
+</div>
+
+{% if tab == 'credentials' %}
+{% if not editable %}
+<div class="note">This process is serving recordings only, so the login cannot
+be changed here. Start the surveillance service.</div>
+{% else %}
+
+{% if cred_msg == 'changed' %}
+<div class="note ok"><b>Changed.</b> Your browser is still sending the old
+login, so it will ask you for the new one on the next page &mdash; on the wall
+tablet you may need to close and reopen the browser tab.</div>
+{% elif cred_err %}
+<div class="note err">{{ cred_err }}</div>
+{% endif %}
+
+{% if acc_msg == 'open' %}
+<div class="note warn"><b>The panel is now open.</b> Anyone who can reach this
+address can watch the camera, move it and browse the recordings, with no
+password.</div>
+{% elif acc_msg == 'trusted' %}
+<div class="note ok">Saved. No password from {{ networks }}; everywhere else
+still needs one.</div>
+{% elif acc_msg == 'password' %}
+<div class="note ok">Saved. A password is required from everywhere.</div>
+{% elif acc_err %}
+<div class="note err">{{ acc_err }}</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('settings_access') }}">
+  <h3>Who needs a password</h3>
+  <label class="mode {% if mode == 'password' %}on{% endif %}">
+    <input type="radio" name="mode" value="password"
+           {% if mode == 'password' %}checked{% endif %}>
+    <span><b>Always</b><br>Every device types the login below.</span></label>
+
+  <label class="mode {% if mode == 'trusted' %}on{% endif %}">
+    <input type="radio" name="mode" value="trusted"
+           {% if mode == 'trusted' %}checked{% endif %}>
+    <span><b>Not on our own network</b><br>No password from the addresses
+    below. Anywhere else still needs one, so a phone away from the club is not
+    locked out.</span></label>
+
+  <div class="field" style="margin-left:34px">
+    <label for="networks">Trusted addresses</label>
+    <input type="text" id="networks" name="networks" value="{{ networks }}"
+           placeholder="192.168.1.0/24" autocapitalize="none"
+           autocorrect="off" spellcheck="false">
+    <span class="sub">One network or address per entry, separated by commas.
+      You are connecting from <b style="color:#9fd8bf">{{ client_ip }}</b> &mdash;
+      for a typical club LAN that means
+      <b style="color:#9fd8bf">{{ client_ip.rsplit('.', 1)[0] }}.0/24</b>.</span>
+  </div>
+
+  <label class="mode {% if mode == 'open' %}on{% endif %}">
+    <input type="radio" name="mode" value="open"
+           {% if mode == 'open' %}checked{% endif %}>
+    <span><b>Nobody &mdash; leave it open</b><br>No password at all, from
+    anywhere. Reasonable on a club network with no route to the internet;
+    <b style="color:#e0a64a">not</b> if this board is ever port-forwarded or
+    put on wifi a guest can join.</span></label>
+
+  <div id="actions"><button type="submit">Save access</button></div>
+</form>
+
+{% if mode_from_panel %}
+<form method="post" action="{{ url_for('settings_access_reset') }}">
+  <p style="color:#6d8378;font-size:13px">
+    Access was set from this panel.
+    <button type="submit" style="font-size:13px;padding:8px 12px;
+      background:#1b2721;color:#8fa39a;border:1px solid #2f3f38;">
+      Back to the configured setting</button>
+  </p>
+</form>
+{% endif %}
+
+<p id="hint">This is the login for the panel itself, not for the camera.
+It is stored on the recording volume as a salted PBKDF2 hash, so a copy of the
+settings file does not reveal it.</p>
+
+<form method="post" action="{{ url_for('settings_credentials') }}"
+      autocomplete="off">
+  <h3>Panel login</h3>
+  <div class="field">
+    <label for="user">User name</label>
+    <input type="text" id="user" name="user" value="{{ cur_user }}"
+           autocapitalize="none" autocorrect="off" spellcheck="false">
+  </div>
+  <div class="field">
+    <label for="current">Current password</label>
+    <input type="password" id="current" name="current"
+           autocomplete="current-password">
+  </div>
+  <div class="field">
+    <label for="new">New password</label>
+    <input type="password" id="new" name="new" autocomplete="new-password">
+    <span class="sub">at least 8 characters</span>
+  </div>
+  <div class="field">
+    <label for="again">New password again</label>
+    <input type="password" id="again" name="again" autocomplete="new-password">
+  </div>
+  <div id="actions"><button type="submit">Change login</button></div>
+</form>
+
+<div class="note">
+  <b>If you lock yourself out</b>, with ssh to the board:
+  <br><code>./settings_cli.py show</code> &mdash; what is set
+  <br><code>./settings_cli.py passwd</code> &mdash; set a new password
+  <br><code>./settings_cli.py open</code> &mdash; drop the password entirely
+  <br><code>./settings_cli.py reset</code> &mdash; forget everything set here
+  <br>The running service picks the change up within a second; no restart.
+</div>
+
+{% if from_panel %}
+<form method="post" action="{{ url_for('settings_credentials_reset') }}">
+  <p style="color:#6d8378;font-size:13px">
+    The login was set from this panel.
+    <button type="submit" style="font-size:13px;padding:8px 12px;
+      background:#1b2721;color:#8fa39a;border:1px solid #2f3f38;">
+      Back to the configured login</button>
+  </p>
+</form>
+{% else %}
+<p style="color:#6d8378;font-size:13px">Using the login from
+<code>config.yaml</code> and <code>secrets.yaml</code>.</p>
+{% endif %}
+
+{% endif %}
+{% else %}
+
+<p id="hint">Recording starts when the detector sees one of these. Everything
+else is still detected and drawn on the live view, just dimmed &mdash; so you
+can tell <b>not detecting</b> apart from <b>detecting things we don't care
+about</b>. Changes apply immediately; no restart.</p>
+
+{% if not editable %}
+<div class="note">This process is serving recordings only, so the list is
+read-only here. Start the surveillance service to change it.</div>
+{% elif saved == 'none' %}
+<div class="note">Saved &mdash; but nothing is ticked, so <b>nothing will ever
+trigger a recording</b>. The camera keeps watching and keeps nothing.</div>
+{% elif saved == 'on' %}
+<div class="note ok">Saved. The detector is using the new list already.</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('settings_page') }}">
+  <h3>Likely</h3>
+  <div class="grid">
+    {% for c in likely %}
+    <label class="cls {% if c in active %}on{% endif %}">
+      <input type="checkbox" name="cls" value="{{ c }}"
+             {% if c in active %}checked{% endif %}
+             {% if not editable %}disabled{% endif %}>{{ c }}</label>
+    {% endfor %}
+  </div>
+
+  <button type="button" id="moretoggle">All {{ rest|length + likely|length }}
+    classes the model knows &hellip;</button>
+  <div id="more">
+    <div class="grid">
+      {% for c in rest %}
+      <label class="cls {% if c in active %}on{% endif %}">
+        <input type="checkbox" name="cls" value="{{ c }}"
+               {% if c in active %}checked{% endif %}
+               {% if not editable %}disabled{% endif %}>{{ c }}</label>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if editable %}
+  <div id="actions">
+    <button type="submit">Save</button>
+    <span id="count"></span>
+  </div>
+  {% endif %}
+</form>
+
+{% if editable %}
+<form method="post" action="{{ url_for('settings_reset') }}">
+  <p style="color:#6d8378;font-size:13px">
+    {% if overridden %}
+      Set from this panel. The configured default is
+      <b style="color:#8fa39a">{{ defaults|join(', ') }}</b>.
+      <button type="submit" style="font-size:13px;padding:8px 12px;
+        background:#1b2721;color:#8fa39a;border:1px solid #2f3f38;">
+        Reset to default</button>
+    {% else %}
+      Using the configured default from config.yaml.
+    {% endif %}
+  </p>
+</form>
+{% endif %}
+
+{% endif %}
+
+<script>
+/* ES5 only. */
+(function () {
+  var more = document.getElementById('more');
+  var mt = document.getElementById('moretoggle');
+  if (mt && more) {
+    mt.addEventListener('click', function (e) {
+      e.preventDefault();
+      var open = more.className === 'show';
+      more.className = open ? '' : 'show';
+      mt.innerHTML = (open ? 'All classes the model knows …'
+                           : 'Hide the full list');
+    }, false);
+  }
+
+  /* Tick state on the label as well as the box: a 20px checkbox is hard to
+     read at arm's length on a wall panel, the filled row is not. */
+  var boxes = document.getElementsByName('cls');
+  var count = document.getElementById('count');
+
+  function refresh() {
+    var n = 0, i;
+    for (i = 0; i < boxes.length; i++) {
+      var lab = boxes[i].parentNode;
+      if (boxes[i].checked) { n++; lab.className = 'cls on'; }
+      else { lab.className = 'cls'; }
+    }
+    if (count) {
+      count.innerHTML = n ? (n + ' selected')
+                          : 'nothing selected — nothing will record';
+    }
+  }
+
+  for (var i = 0; i < boxes.length; i++) {
+    boxes[i].addEventListener('change', refresh, false);
+  }
+  refresh();
+})();
+</script>
+{% endblock %}

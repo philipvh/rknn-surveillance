@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>TVW camera</title>
+<style>
+/* Deliberately ES5-era CSS: flexbox, no grid, no custom properties, so it
+   renders on the Tab S's frozen browser. Dark to spare the AMOLED. */
+* { box-sizing: border-box; -webkit-tap-highlight-color: rgba(0,0,0,0); }
+html, body { margin:0; padding:0; height:100%; background:#0d1310; color:#dfe7e1;
+  font-family: Helvetica, Arial, sans-serif; overflow:hidden; }
+#wrap { display:-webkit-box; display:-webkit-flex; display:flex;
+  -webkit-flex-direction:column; flex-direction:column; height:100%; }
+#bar { -webkit-flex:0 0 auto; flex:0 0 auto; display:-webkit-flex; display:flex;
+  -webkit-align-items:center; align-items:center; padding:8px 12px;
+  background:#131c18; border-bottom:1px solid #24322c; }
+#state { font-weight:bold; font-size:17px; }
+#sub { color:#8fa39a; font-size:13px; margin-left:10px; -webkit-flex:1; flex:1; }
+.pill { padding:4px 10px; border-radius:3px; font-size:12px; font-weight:bold;
+  letter-spacing:.08em; text-transform:uppercase; }
+.armed { background:#2c1c14; color:#e0a64a; }
+.disarmed { background:#17241e; color:#6d8378; }
+#body { -webkit-flex:1; flex:1; display:-webkit-flex; display:flex; min-height:0; }
+#view { -webkit-flex:1; flex:1; position:relative; background:#000; min-width:0; }
+#view img { width:100%; height:100%; object-fit:contain; display:block; }
+/* A column, so the notice can be pushed to the foot of the pad. Children are
+   0 0 auto: as a flex container the default shrink of 1 would squash the
+   buttons when the controls are taller than the screen. */
+#pad { -webkit-flex:0 0 300px; flex:0 0 300px; padding:10px;
+  overflow-y:auto; background:#111a16; border-left:1px solid #24322c;
+  display:-webkit-flex; display:flex;
+  -webkit-flex-direction:column; flex-direction:column; }
+#pad > * { -webkit-flex:0 0 auto; flex:0 0 auto; }
+.row { display:-webkit-flex; display:flex; margin-bottom:8px; }
+.row > * { -webkit-flex:1; flex:1; margin-right:8px; }
+.row > *:last-child { margin-right:0; }
+button { font-size:17px; font-weight:bold; padding:16px 8px; border:1px solid #2f3f38;
+  background:#1b2721; color:#dfe7e1; border-radius:4px; -webkit-user-select:none;
+  user-select:none; touch-action:manipulation; }
+button:active, button.on { background:#2f6a53; border-color:#3f8a6c; }
+button.wide { padding:14px 8px; font-size:15px; }
+button.small { font-size:13px; padding:10px 6px; font-weight:normal; }
+button[disabled] { opacity:.35; }
+.dpad button { height:64px; }
+.spacer { visibility:hidden; }
+h3 { margin:14px 0 6px; font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+  color:#6d8378; font-weight:bold; }
+#viewtoggle { position:absolute; right:10px; top:10px; font-size:13px;
+  padding:8px 12px; opacity:.85; }
+/* A switch, because the state is what matters here -- a button labelled with
+   the thing it would switch to makes you read it twice to learn where you are. */
+.swrow { display:-webkit-flex; display:flex; -webkit-align-items:center;
+  align-items:center; margin-bottom:8px; }
+.swlabel { -webkit-flex:1; flex:1; font-size:14px; color:#dfe7e1; }
+button.sw { -webkit-flex:0 0 54px; flex:0 0 54px; width:54px; height:30px;
+  padding:0; border-radius:15px; background:#1b2721; border:1px solid #2f3f38;
+  position:relative; }
+button.sw .knob { position:absolute; top:3px; left:3px; width:22px; height:22px;
+  border-radius:11px; background:#6d8378;
+  -webkit-transition:left .15s ease, background .15s ease;
+  transition:left .15s ease, background .15s ease; }
+button.sw.on { background:#2f6a53; border-color:#3f8a6c; }
+button.sw.on .knob { left:27px; background:#eef5f1; }
+#msg { position:absolute; left:10px; bottom:10px; right:10px; padding:8px 12px;
+  background:rgba(20,10,4,.92); color:#e0a64a; font-size:14px; border-radius:3px;
+  display:none; }
+#links a { color:#62bb99; font-size:14px; text-decoration:none; display:block;
+  padding:8px 0; border-bottom:1px solid #1d2925; }
+@media (max-width: 720px) {
+  #body { -webkit-flex-direction:column; flex-direction:column; }
+  #pad { -webkit-flex:0 0 auto; flex:0 0 auto; border-left:0; border-top:1px solid #24322c; }
+  /* Stacked, there is no column to sit at the foot of: keep it in the flow.
+     Two IDs, because this media query is declared above the #legal rule it
+     has to beat and equal specificity would lose on source order. */
+  #pad > #legal { margin-top:14px; }
+}
+/* Ownership and the disclaimer, bottom right of the control pad. Quiet
+   enough to ignore while operating the camera, legible when looked for.
+   Tapping it opens the full terms. */
+/* margin-top:auto takes the slack, so the notice sits at the bottom of the
+   pad. When the controls overflow instead, the auto margin collapses and it
+   simply follows them -- no overlap either way. */
+#legal { margin-top:auto; padding-top:10px; border-top:1px solid #1d2925;
+  text-align:right; color:#5f7a6e; font-size:11px; line-height:1.45; }
+#legal b { color:#8fa39a; font-weight:normal; display:block; font-size:12px; }
+#legal a { color:#5f7a6e; text-decoration:underline; }
+#legal .warn { display:block; margin-top:4px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="bar">
+    <span id="state">&hellip;</span>
+    <span id="sub"></span>
+    <span id="arm" class="pill disarmed">&mdash;</span>
+  </div>
+  <div id="body">
+    <div id="view">
+      <img id="live" alt="live view">
+      {% if has_detector %}
+      <button id="viewtoggle" class="on">Camera view</button>
+      {% endif %}
+      <div id="msg"></div>
+    </div>
+    <div id="pad">
+      {% if has_detector %}
+      <div class="swrow">
+        <span class="swlabel">Detector overlays</span>
+        <button id="overlays" class="sw on" role="switch"
+                aria-checked="true" title="draw detection boxes on the live view"><span class="knob"></span></button>
+      </div>
+      {% endif %}
+      {% if has_ptz %}
+      <div class="dpad">
+        <div class="row">
+          <button class="spacer"></button>
+          <button data-move="up">&#9650;</button>
+          <button class="spacer"></button>
+        </div>
+        <div class="row">
+          <button data-move="left">&#9664;</button>
+          <button data-stop="1">STOP</button>
+          <button data-move="right">&#9654;</button>
+        </div>
+        <div class="row">
+          <button class="spacer"></button>
+          <button data-move="down">&#9660;</button>
+          <button class="spacer"></button>
+        </div>
+      </div>
+      <div class="row">
+        <button data-zoom="in">ZOOM +</button>
+        <button data-zoom="out">ZOOM &minus;</button>
+      </div>
+      <h3>Presets</h3>
+      <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
+      {% for p in presets %}{% if p != home %}
+      <div class="row"><button class="wide" data-preset="{{ p }}">{{ p }}</button></div>
+      {% endif %}{% endfor %}
+      <h3>System</h3>
+      <div class="row"><button class="wide" id="scan">Scan now</button></div>
+      <div class="row">
+        <button class="small" id="disarm2h">Disarm 2h</button>
+        <button class="small" id="armnow">Arm now</button>
+      </div>
+      <div class="row"><button class="small" id="autoarm">Back to schedule</button></div>
+      {% if has_speaker %}
+      <div class="row">
+        <button class="small" id="mute2h">Mute speaker 2h</button>
+        <button class="small" id="unmute">Unmute</button>
+      </div>
+      {% endif %}
+      {% else %}
+      <h3>Camera control unavailable</h3>
+      <p style="color:#8fa39a;font-size:14px">This process is serving
+      recordings only. Start the surveillance service for PTZ.</p>
+      {% endif %}
+      <h3>Recordings</h3>
+      <div id="links">
+        <a href="/media">Stills &amp; clips</a>
+        <a href="/settings">Settings</a>
+      </div>
+
+      <div id="legal">
+        <b>&copy; 2026 Philip van Houtte<br>magicview.tv, the Netherlands</b>
+        <span class="warn">Provided as an aid, without warranty. It may miss
+        events, lose footage or stop without warning; no liability is accepted
+        for any loss or damage arising from its use or from a failure to
+        detect, record or report an event.</span>
+        <a href="/legal">Apache&nbsp;2.0 &mdash; licence &amp; notices</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ES5 only: no let/const, no arrow functions, no fetch, no Promise.
+   The Tab S browser is frozen wherever its last update left it. */
+(function () {
+  var KEEPALIVE = {{ keepalive_ms }};
+  var moving = null, timer = null, statusTimer = null, msgTimer = null;
+
+  function post(path, data, cb) {
+    var x = new XMLHttpRequest();
+    x.open('POST', path, true);
+    x.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    x.onreadystatechange = function () {
+      if (x.readyState === 4 && cb) {
+        var r = null;
+        try { r = JSON.parse(x.responseText); } catch (e) {}
+        cb(r, x.status);
+      }
+    };
+    x.send(data || '');
+  }
+
+  function say(text) {
+    var m = document.getElementById('msg');
+    if (!text) { m.style.display = 'none'; return; }
+    m.innerHTML = text;
+    m.style.display = 'block';
+    if (msgTimer) clearTimeout(msgTimer);
+    msgTimer = setTimeout(function () { m.style.display = 'none'; }, 4000);
+  }
+
+  function handle(r) { if (r && r.ok === false && r.error) say(r.error); }
+
+  /* ---- movement -------------------------------------------------------
+     The camera moves until something stops it, so a held button refreshes
+     the server's deadline and release sends an explicit stop. If any of
+     that fails -- and on a tablet that sleeps mid-press, it will -- the
+     server's own deadline stops the motors anyway. This is belt; the
+     braces are in ptz.py. */
+  function startMove(kind, dir) {
+    stopMove(true);
+    moving = { kind: kind, dir: dir };
+    var send = function () {
+      post('/api/ptz/' + kind, 'dir=' + encodeURIComponent(dir), handle);
+    };
+    send();
+    timer = setInterval(function () { if (moving) send(); }, KEEPALIVE);
+  }
+
+  function stopMove(quiet) {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (!moving) return;
+    moving = null;
+    post('/api/ptz/stop', '', quiet ? null : handle);
+  }
+
+  function bindHold(el, kind, dir) {
+    var down = function (e) { e.preventDefault(); el.className = 'on'; startMove(kind, dir); };
+    var up = function (e) { if (e) e.preventDefault(); el.className = ''; stopMove(); };
+    /* touch first: pointer events do not exist on old Android */
+    el.addEventListener('touchstart', down, false);
+    el.addEventListener('touchend', up, false);
+    el.addEventListener('touchcancel', up, false);
+    el.addEventListener('mousedown', down, false);
+    el.addEventListener('mouseup', up, false);
+    el.addEventListener('mouseleave', up, false);
+  }
+
+  var i, els = document.querySelectorAll('[data-move]');
+  for (i = 0; i < els.length; i++) bindHold(els[i], 'move', els[i].getAttribute('data-move'));
+  els = document.querySelectorAll('[data-zoom]');
+  for (i = 0; i < els.length; i++) bindHold(els[i], 'zoom', els[i].getAttribute('data-zoom'));
+
+  els = document.querySelectorAll('[data-stop]');
+  for (i = 0; i < els.length; i++) {
+    els[i].addEventListener('click', function (e) { e.preventDefault(); stopMove(); }, false);
+  }
+
+  els = document.querySelectorAll('[data-preset]');
+  for (i = 0; i < els.length; i++) {
+    (function (el) {
+      el.addEventListener('click', function (e) {
+        e.preventDefault();
+        post('/api/ptz/preset', 'name=' + encodeURIComponent(el.getAttribute('data-preset')), handle);
+      }, false);
+    })(els[i]);
+  }
+
+  /* anything that means the page is going away must release the motors */
+  function panic() { stopMove(true); }
+  window.addEventListener('blur', panic, false);
+  window.addEventListener('pagehide', panic, false);
+  window.addEventListener('beforeunload', panic, false);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) panic();
+  }, false);
+
+  function bindClick(id, path, data) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      post(path, data, function (r) { handle(r); refresh(); });
+    }, false);
+  }
+  bindClick('scan', '/api/scan', '');
+  bindClick('disarm2h', '/api/arm', 'armed=0&minutes=120');
+  bindClick('armnow', '/api/arm', 'armed=1&minutes=120');
+  bindClick('autoarm', '/api/arm/clear', '');
+  bindClick('mute2h', '/api/mute', 'muted=1&minutes=120');
+  bindClick('unmute', '/api/mute', 'muted=0');
+
+  /* ---- status --------------------------------------------------------- */
+  function refresh() {
+    var x = new XMLHttpRequest();
+    x.open('GET', '/api/status?t=' + (new Date()).getTime(), true);
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4) return;
+      var s;
+      try { s = JSON.parse(x.responseText); } catch (e) { return; }
+      document.getElementById('state').innerHTML =
+        (s.state || 'unknown').toUpperCase();
+      var bits = [];
+      if (s.preset) bits.push(s.preset);
+      if (s.pir_active) bits.push('PIR');
+      if (s.incident_open) bits.push('recording');
+      if (s.muted) bits.push('speaker muted');
+      if (s.tracking_enabled && s.pulses) bits.push('tracking');
+      if (s.ptz && s.ptz.budget_manual_left_s !== undefined) {
+        bits.push('motor ' + Math.round(s.ptz.budget_manual_left_s) + 's');
+      }
+      bits.push(s.time || '');
+      document.getElementById('sub').innerHTML = bits.join(' &middot; ');
+      var a = document.getElementById('arm');
+      a.innerHTML = s.armed ? 'Armed' : 'Disarmed';
+      a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
+    };
+    x.send();
+  }
+  refresh();
+  statusTimer = setInterval(refresh, 2000);
+
+  /* ---- live view ------------------------------------------------------
+     MJPEG in an <img>. If the stream dies the browser leaves a broken
+     image, so reload it on error rather than showing nothing all night. */
+  var live = document.getElementById('live');
+  /* Overlays on by default: the boxes are the reason to watch the panel
+     rather than the camera's own app, and the raw view is one tap away. */
+  var showDetector = true;
+
+  function startStream() {
+    var path = showDetector ? '/detect.mjpg' : '/stream.mjpg';
+    live.src = path + '?t=' + (new Date()).getTime();
+  }
+
+  var vt = document.getElementById('viewtoggle');
+  var sw = document.getElementById('overlays');
+
+  /* One function owns the state. The switch on the pad and the button over
+     the video are two views of it; letting them drift would leave the panel
+     disagreeing with itself about what is on screen. */
+  function setOverlays(on, restart) {
+    showDetector = !!on;
+    if (sw) {
+      sw.className = 'sw' + (showDetector ? ' on' : '');
+      sw.setAttribute('aria-checked', showDetector ? 'true' : 'false');
+    }
+    if (vt) {
+      /* This one names where tapping takes you, not where you are. */
+      vt.innerHTML = showDetector ? 'Camera view' : 'Detector view';
+      vt.className = showDetector ? 'on' : '';
+    }
+    if (restart) startStream();
+  }
+
+  if (sw) {
+    sw.addEventListener('click', function (e) {
+      e.preventDefault(); setOverlays(!showDetector, true);
+    }, false);
+  }
+  if (vt) {
+    vt.addEventListener('click', function (e) {
+      e.preventDefault(); setOverlays(!showDetector, true);
+    }, false);
+  }
+  live.addEventListener('error', function () {
+    setTimeout(startStream, 5000);
+  }, false);
+  setOverlays(showDetector, true);
+})();
+</script>
+</body>
+</html>

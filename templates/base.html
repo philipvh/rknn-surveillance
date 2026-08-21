@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{{ title if title else "TVW camera" }}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { margin:0; background:#0d1310; color:#dfe7e1;
+  font-family: Helvetica, Arial, sans-serif; }
+header { background:#131c18; padding:10px 14px; border-bottom:1px solid #24322c; }
+header a { color:#62bb99; margin-right:16px; text-decoration:none; font-size:15px; }
+main { padding:14px; }
+ul { list-style:none; padding:0; }
+li { border-bottom:1px solid #1d2925; }
+li a { color:#dfe7e1; text-decoration:none; display:block; padding:14px 4px;
+  font-size:16px; }
+li a:active { background:#1b2721; }
+.size { color:#6d8378; font-size:13px; float:right; }
+</style>
+</head>
+<body>
+<header>
+  <a href="{{ url_for('panel') }}">&larr; Panel</a>
+  <a href="{{ url_for('media_browser') }}">Stills &amp; clips</a>
+  <a href="{{ url_for('settings_page') }}">Settings</a>
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

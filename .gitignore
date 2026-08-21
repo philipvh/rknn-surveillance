@@ -1,0 +1,35 @@
+# Secrets and this board's own settings. Never commit these.
+secrets.yaml
+config.local.yaml
+settings.json
+
+# Recorded material. The whole point of the system, and none of it belongs
+# in version control.
+recordings/
+detections/
+events/
+hls/
+shadow/
+state/
+link/
+
+# The RKNN model is a 16 MB binary belonging to Rockchip, not to this
+# project. See README: it is built from the model zoo, or copied from a
+# working install.
+model/*.rknn
+model/*.onnx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Local run artefacts
+.run_test.pid
+*.tmp
+phase0_report_*.txt
+phase0_snapshot.jpg
+model/*.jpg
+model/*.txt

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+#legaltext { white-space:pre-wrap; font-family:monospace; font-size:13px;
+  line-height:1.5; color:#b9c8c0; background:#111a16; padding:14px;
+  border:1px solid #24322c; overflow-x:auto; }
+#legalhead { color:#8fa39a; font-size:15px; margin:0 0 12px 0; }
+</style>
+<p id="legalhead">&copy; 2026 Philip van Houtte, magicview.tv, the Netherlands
+&mdash; Apache License 2.0</p>
+<div id="legaltext">{{ text }}</div>
+{% endblock %}

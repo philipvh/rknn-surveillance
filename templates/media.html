@@ -1,0 +1,639 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+/* ES5-era CSS: flexbox, no grid, no custom properties. */
+#wrap { display:-webkit-flex; display:flex; height:calc(100vh - 120px); }
+#left { -webkit-flex:0 0 190px; flex:0 0 190px; display:-webkit-flex; display:flex;
+  -webkit-flex-direction:column; flex-direction:column; min-width:0; }
+#filmtop { -webkit-flex:0 0 auto; flex:0 0 auto; display:-webkit-flex; display:flex; }
+#filmtop button { -webkit-flex:1; flex:1; font-size:12px; padding:7px 4px;
+  background:#1b2721; color:#8fa39a; border:1px solid #2f3f38; }
+#filmtop button:active { background:#2f6a53; color:#dfe7e1; }
+/* position:relative so a frame's offsetTop is measured against the strip
+   itself, however deeply the groups nest it. */
+#film { -webkit-flex:1; flex:1; overflow-y:auto; position:relative;
+  -webkit-overflow-scrolling:touch; background:#0b110e; padding:6px; }
+/* The drag handle. Wide enough to hit with a thumb on the tablet. */
+#grip { -webkit-flex:0 0 10px; flex:0 0 10px; background:#16211c;
+  border-left:1px solid #24322c; border-right:1px solid #24322c;
+  cursor:col-resize; position:relative; }
+#grip:after { content:""; position:absolute; left:3px; top:50%; width:4px;
+  height:44px; margin-top:-22px; background:#2f3f38; border-radius:2px; }
+#grip.drag:after { background:#62bb99; }
+body.resizing { cursor:col-resize; -webkit-user-select:none; user-select:none; }
+#right { -webkit-flex:1; flex:1; display:-webkit-flex; display:flex;
+  -webkit-flex-direction:column; flex-direction:column; min-width:0;
+  padding-left:12px; }
+#bar { -webkit-flex:0 0 auto; flex:0 0 auto; display:-webkit-flex; display:flex;
+  -webkit-align-items:center; align-items:center; margin-bottom:8px; }
+#bar select { font-size:15px; padding:8px; background:#1b2721; color:#dfe7e1;
+  border:1px solid #2f3f38; border-radius:3px; margin-right:10px; }
+#tabs { display:-webkit-flex; display:flex; }
+#tabs button, #modes button { font-size:15px; font-weight:bold; padding:10px 16px;
+  background:#1b2721; color:#8fa39a; border:1px solid #2f3f38; }
+#tabs button.on, #modes button.on { color:#dfe7e1; background:#2f6a53;
+  border-color:#3f8a6c; }
+#modes { margin-left:auto; display:none; }
+#modes.show { display:-webkit-flex; display:flex; }
+#stage { -webkit-flex:1; flex:1; background:#000; min-height:0;
+  display:-webkit-flex; display:flex; -webkit-align-items:center;
+  align-items:center; -webkit-justify-content:center; justify-content:center; }
+#stage img, #stage video { max-width:100%; max-height:100%; display:block; }
+#caption { -webkit-flex:0 0 auto; flex:0 0 auto; color:#8fa39a; font-size:14px;
+  padding:8px 0; }
+#live { float:right; font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+  color:#62bb99; }
+#live.off { color:#6d8378; }
+.empty { color:#6d8378; padding:30px; text-align:center; font-size:15px; }
+/* A film strip: frames stacked, each big enough to recognise a person in. */
+.frame { display:block; width:100%; margin:0 0 4px 0; padding:0;
+  border:3px solid transparent; background:#131c18; position:relative; }
+/* A 16:9 box sized by padding, so the thumbnail grows with the strip instead
+   of getting wider and staying 96px tall -- and so the strip does not reflow
+   as each image arrives. */
+.frame .ph { display:block; position:relative; width:100%; padding-top:56.25%;
+  background:#0f1714; overflow:hidden; }
+.frame .ph img { position:absolute; top:0; left:0; width:100%; height:100%;
+  object-fit:cover; display:block; }
+.frame span { display:block; font-size:12px; color:#9fb3a9; padding:3px 0;
+  font-family:monospace; }
+.frame.on { border-color:#62bb99; }
+.frame.on span { color:#dfe7e1; }
+.frame.hasclip span:after { content:" \25B6"; color:#e0a64a; }
+/* One group per clip. Collapsed, only the first thumbnail survives -- so a
+   day of 1000 stills reads as a dozen events. */
+.grp { margin:0 0 8px 0; }
+/* A tree row: the control sits in its own gutter, the label takes the rest.
+   Nothing overlaps, so the +/- is always in the same place down the column. */
+.grp-h { display:-webkit-flex; display:flex; width:100%; text-align:left;
+  -webkit-align-items:center; align-items:center; font-family:monospace;
+  font-size:12px; padding:5px 6px 5px 0; background:#16211c; color:#9fb3a9;
+  border:1px solid #24322c; }
+.grp-h .lbl { -webkit-flex:1; flex:1; min-width:0; }
+.grp-h .cnt { -webkit-flex:0 0 auto; flex:0 0 auto; color:#6d8378;
+  padding-left:6px; }
+/* The body is indented past the gutter, and while open a rule runs down it
+   bracketing the thumbnails the group holds. */
+.grp-b { padding-left:24px; position:relative; }
+.grp:not(.collapsed) > .grp-b:before { content:""; position:absolute;
+  left:13px; top:2px; bottom:10px; width:2px; background:#3a4c44; }
+.grp:not(.collapsed) > .grp-b:after { content:""; position:absolute;
+  left:13px; bottom:10px; width:8px; height:2px; background:#3a4c44; }
+/* The tree control: [+] to open one group, [-] to fold it again. Boxed so it
+   reads as a hit target rather than punctuation. */
+.grp-h .tw { -webkit-flex:0 0 18px; flex:0 0 18px; width:18px; height:18px;
+  line-height:16px; margin:0 4px; text-align:center;
+  border:1px solid #587367; background:#0b110e; color:#dfe7e1;
+  font-family:monospace; font-size:15px; font-weight:bold; }
+.grp-h:active .tw { background:#2f6a53; color:#fff; border-color:#62bb99; }
+.grp-h.hasclip { color:#e0a64a; }
+/* The group holding the current selection, visible even when it is folded. */
+.grp-h.sel { border-color:#3f8a6c; background:#1d2f27; }
+.grp-h.sel .lbl { color:#dfe7e1; }
+.grp.collapsed > .grp-h .tw:after { content:"+"; }
+.grp:not(.collapsed) > .grp-h .tw:after { content:"\2212"; }
+.grp.collapsed .grp-b > .frame { display:none; }
+/* Folded, a group shows exactly one thumbnail. Normally its first, but the
+   selected one when the selection is inside it -- so folding never hides
+   what is being looked at. */
+.grp.collapsed .grp-b > .frame.shown { display:block; }
+@media (max-width:720px) {
+  #wrap { -webkit-flex-direction:column; flex-direction:column; height:auto; }
+  /* Stacked: the divider has no meaning, and the width is the screen's. */
+  #grip { display:none; }
+  /* !important: the drag stores the width as an inline style, which would
+     otherwise pin the stacked layout to a desktop column width. */
+  #left { -webkit-flex:0 0 auto !important; flex:0 0 auto !important;
+    width:auto !important; border-bottom:1px solid #24322c; }
+  #film { -webkit-flex:0 0 auto; flex:0 0 auto; max-height:38vh; }
+  #right { padding-left:0; padding-top:10px; }
+  #stage { min-height:240px; }
+}
+</style>
+
+<div id="wrap">
+  <div id="left">
+    <div id="filmtop">
+      <button id="collapse-all" title="one thumbnail per clip">Collapse</button>
+      <button id="expand-all" title="every still">Expand</button>
+    </div>
+    <div id="film"></div>
+  </div>
+  <div id="grip" title="drag to resize &mdash; double-click to reset"></div>
+  <div id="right">
+    <div id="bar">
+      <select id="day">
+        {% for d in days %}
+        <option value="{{ d }}" {% if d == day %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+      <div id="tabs">
+        <button id="tab-jpg" class="on">Stills</button>
+        <button id="tab-mp4">Video</button>
+      </div>
+      <div id="modes">
+        <button id="mode-ann" class="on">Annotated</button>
+        <button id="mode-full">Full res</button>
+      </div>
+    </div>
+    <div id="stage"><div class="empty">nothing recorded for this day</div></div>
+    <div id="caption"><span id="live">live</span></div>
+  </div>
+</div>
+
+<script>
+/* ES5 only. */
+(function () {
+  var SHOTS = [
+    {% for s in shots %}{name:"{{ s.name }}", at:"{{ s.at }}", secs:{{ s.secs }}, url:"{{ s.url }}"}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+  var CLIPS = [
+    {% for c in clips %}{name:"{{ c.name }}", at:"{{ c.at }}", start:{{ c.start }}, end:{{ c.end }}, t0:{{ c.t0 }}, annT0:{{ c.annT0 }}, size:"{{ c.size }}", url:"{{ c.url }}", ann:"{{ c.ann }}", annSize:"{{ c.annSize }}"}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  ];
+
+  var OPEN_SINCE = {{ open_since }};
+  var CUTTING = {{ cutting }};
+  var DAY = "{{ day }}";
+  var POLL_MS = {{ poll_ms }};
+  var newest = SHOTS.length ? SHOTS[SHOTS.length - 1].secs : -1;
+
+  var wrapEl = document.getElementById('wrap');
+  var leftEl = document.getElementById('left');
+  var grip = document.getElementById('grip');
+  var film = document.getElementById('film');
+  var stage = document.getElementById('stage');
+  var caption = document.getElementById('caption');
+  var tabJpg = document.getElementById('tab-jpg');
+  var tabMp4 = document.getElementById('tab-mp4');
+  var modes = document.getElementById('modes');
+  var modeAnn = document.getElementById('mode-ann');
+  var modeFull = document.getElementById('mode-full');
+
+  var tab = 'jpg';
+  var videoMode = 'ann';          /* small and quick by default */
+  /* The moment being looked at, shared by both tabs: find the second in the
+     stills, then watch it. */
+  var chosen = SHOTS.length ? SHOTS[0].secs : (CLIPS.length ? CLIPS[0].start : null);
+
+  /* Which groups are folded, and the strip's width. Both are the kind of
+     thing you set once and want to find again, so they outlive the page. */
+  var collapsed = {};
+  var groupEls = {};
+  var PREF_KEY = 'tvw.collapsed', W_KEY = 'tvw.filmw';
+
+  function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  function fetchStored(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+
+  /* Default folded: a day is hundreds of stills but only a dozen events, and
+     one thumbnail per event is the useful index. The live group stays open --
+     it is the thing being watched. */
+  var PREF_COLLAPSE = fetchStored(PREF_KEY) !== 'no';
+  function defaultCollapsed(key) { return key === '_live' ? false : PREF_COLLAPSE; }
+
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function hhmmss(s) {
+    return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s / 60) % 60) + ':' + pad(s % 60);
+  }
+
+  function clipCovering(secs) {
+    for (var i = 0; i < CLIPS.length; i++) {
+      /* t0 is the first frame on disk, which precedes the window start. */
+      if (secs >= CLIPS[i].t0 && secs <= CLIPS[i].end) return CLIPS[i];
+    }
+    return null;
+  }
+
+  function nearestShot(secs) {
+    var best = null, bestd = 1e9;
+    for (var i = 0; i < SHOTS.length; i++) {
+      var d = Math.abs(SHOTS[i].secs - secs);
+      if (d < bestd) { bestd = d; best = SHOTS[i]; }
+    }
+    return best;
+  }
+
+  /* Scroll the strip only far enough to bring one frame into view, computed
+     by hand. scrollIntoView with an options object is ignored by the tablet's
+     browser, which then falls back to aligning to the top -- so every poll
+     that appended a frame yanked the strip away from whatever was being
+     looked at. */
+  var autoScrolling = false;
+
+  function ensureVisible(el) {
+    if (!el) return;
+    var top = el.offsetTop - film.offsetTop;
+    var bottom = top + el.offsetHeight;
+    var want = film.scrollTop;
+    if (top < want) want = top;
+    else if (bottom > want + film.clientHeight) want = bottom - film.clientHeight;
+    if (want === film.scrollTop) return;
+    autoScrolling = true;
+    film.scrollTop = want;
+    autoScrolling = false;
+  }
+
+  /* scroll: only ever true for a deliberate move -- a tap, or following the
+     live edge. Appending frames must leave the view exactly where it is. */
+  function mark(scroll) {
+    var kids = film.getElementsByClassName('frame'), i, target = null;
+    for (i = 0; i < kids.length; i++) {
+      if (!kids[i].getAttribute) continue;
+      var v = parseInt(kids[i].getAttribute('data-secs'), 10);
+      var cls = 'frame' + (clipCovering(v) ? ' hasclip' : '');
+      kids[i].className = cls + (v === chosen ? ' on' : '');
+      if (v === chosen) target = kids[i];
+    }
+    /* Which group holds the selection, so a folded group still shows it. */
+    var sel = target ? groupOf(target) : null;
+    for (var k in groupEls) {
+      if (!groupEls.hasOwnProperty(k)) continue;
+      var g2 = groupEls[k];
+      g2.head.className = (g2 === sel) ? g2.headBase + ' sel' : g2.headBase;
+      /* Pick the one thumbnail this group shows while folded. */
+      var show = (g2 === sel && target) ? target : g2.body.firstChild;
+      if (show && show.className !== undefined) {
+        show.className += ' shown';
+      }
+    }
+
+    if (!scroll || !target) return;
+    /* Selecting a moment inside a folded group: open it, or the thing just
+       chosen would be the one thumbnail that is hidden. */
+    if (!target.offsetParent) {
+      var g = groupOf(target);
+      if (g) { collapsed[g.key] = false; paint(g); }
+    }
+    ensureVisible(target);
+  }
+
+  function showStill() {
+    var shot = nearestShot(chosen);
+    if (!shot) {
+      stage.innerHTML = '<div class="empty">no stills for this day</div>';
+      caption.innerHTML = ''; return;
+    }
+    chosen = shot.secs;
+    stage.innerHTML = '';
+    var img = document.createElement('img');
+    img.src = shot.url;
+    stage.appendChild(img);
+    var c = clipCovering(chosen);
+    caption.innerHTML = '<span id="live">' + (following ? 'live' : 'paused') +
+      '</span>' + shot.at + (c ? ' &nbsp;&middot;&nbsp; video available' : '');
+    mark(drawScroll);
+  }
+
+  function showVideo() {
+    var clip = clipCovering(chosen);
+    if (!clip) {
+      /* A still only exists because something triggered, so the usual reason
+         there is no clip is that the incident has not finished yet -- the clip
+         is cut when it does. */
+      var why;
+      if (OPEN_SINCE >= 0 && chosen >= OPEN_SINCE) {
+        why = 'still recording &mdash; the clip is cut when the incident ends';
+      } else if (CUTTING > 0) {
+        why = 'a clip is being cut right now &mdash; this may be it';
+      } else {
+        why = 'no clip was made for this moment';
+      }
+      stage.innerHTML = '<div class="empty">no video yet for ' + hhmmss(chosen) +
+        '<br><span style="font-size:13px">' + why + '</span></div>';
+      caption.innerHTML = ''; return;
+    }
+    var useAnn = (videoMode === 'ann') && clip.ann;
+    /* Some events survive only as their annotated companion, because the
+       full-resolution cut failed. Fall back rather than setting src="",
+       which makes the player sit there showing nothing. */
+    var fellBack = false;
+    if (!useAnn && !clip.url && clip.ann) { useAnn = true; fellBack = true; }
+    if (useAnn && !clip.ann) { useAnn = false; }
+    var src = useAnn ? clip.ann : clip.url;
+    if (!src) {
+      stage.innerHTML = '<div class="empty">no video for ' + hhmmss(chosen) +
+        '<br><span style="font-size:13px">the clip for this moment is gone' +
+        '</span></div>';
+      caption.innerHTML = ''; return;
+    }
+    /* Each file starts at a different moment: the full-resolution clip on a
+       whole-minute segment boundary, the companion when the incident began.
+       Offsetting from the wrong one lands up to a minute out. */
+    var base = useAnn ? clip.annT0 : clip.t0;
+    var offset = Math.max(0, chosen - base);
+    stage.innerHTML = '';
+    var v = document.createElement('video');
+    v.setAttribute('controls', 'controls');
+    v.setAttribute('playsinline', 'playsinline');
+    /* metadata only: the full-res files are large and an old tablet should not
+       try to buffer one before it can seek. */
+    v.setAttribute('preload', 'metadata');
+    v.src = src + (offset > 0 ? '#t=' + offset : '');
+    v.addEventListener('loadedmetadata', function () {
+      if (offset > 0 && Math.abs(v.currentTime - offset) > 1) {
+        try { v.currentTime = offset; } catch (e) {}
+      }
+    }, false);
+    stage.appendChild(v);
+    caption.innerHTML = '<span id="live">' + (following ? 'live' : 'paused') +
+      '</span>' + hhmmss(chosen) + ' &nbsp;&middot;&nbsp; ' +
+      (useAnn ? 'annotated ' + clip.annSize +
+                (fellBack ? ' &mdash; no full-resolution cut for this one' : '')
+              : 'full resolution ' + clip.size) +
+      ' &nbsp;&middot;&nbsp; +' + offset + 's into a clip starting ' +
+      hhmmss(base);
+    mark(drawScroll);
+  }
+
+  function draw(scroll) {
+    drawScroll = !!scroll;
+    if (tab === 'jpg') showStill(); else showVideo();
+    drawScroll = false;
+    var ind = document.getElementById('live');
+    if (ind) {
+      ind.innerHTML = following ? 'live' : 'paused';
+      ind.className = following ? '' : 'off';
+    }
+  }
+
+  function makeFrame(item, withImage) {
+    var secs = (item.secs !== undefined) ? item.secs : item.start;
+    var b = document.createElement('button');
+    b.className = 'frame';
+    b.setAttribute('data-secs', secs);
+    if (item.url && withImage) {
+      var ph = document.createElement('span');
+      ph.className = 'ph';
+      var im = document.createElement('img');
+      im.src = item.url;
+      ph.appendChild(im);
+      b.appendChild(ph);
+    }
+    var sp = document.createElement('span');
+    sp.innerHTML = item.at;
+    b.appendChild(sp);
+    b.addEventListener('click', function (e) {
+      e.preventDefault(); chosen = secs; following = false; draw();
+    }, false);
+    return b;
+  }
+
+  function keyFor(secs) {
+    var c = clipCovering(secs);
+    return c ? c.name : '_live';
+  }
+
+  function makeGroup(key, clip) {
+    var wrap = document.createElement('div');
+    wrap.setAttribute('data-key', key);
+    var head = document.createElement('button');
+    head.className = 'grp-h' + (clip ? ' hasclip' : '');
+    var tw = document.createElement('span');
+    tw.className = 'tw';
+    var lbl = document.createElement('span');
+    lbl.className = 'lbl';
+    lbl.innerHTML = clip ? clip.at : 'not cut yet';
+    var cnt = document.createElement('span');
+    cnt.className = 'cnt';
+    head.appendChild(tw);
+    head.appendChild(lbl);
+    head.appendChild(cnt);
+    var body = document.createElement('div');
+    body.className = 'grp-b';
+    wrap.appendChild(head);
+    wrap.appendChild(body);
+
+    if (!collapsed.hasOwnProperty(key)) collapsed[key] = defaultCollapsed(key);
+    var g = {key: key, wrap: wrap, body: body, head: head,
+             headBase: head.className, n: 0,
+             setCount: function (n) { cnt.innerHTML = n; }};
+    paint(g);
+    head.addEventListener('click', function (e) {
+      e.preventDefault();
+      collapsed[key] = !collapsed[key];
+      paint(g);
+      mark(false);
+    }, false);
+    return g;
+  }
+
+  function paint(g) {
+    g.wrap.className = 'grp' + (collapsed[g.key] ? ' collapsed' : '');
+  }
+
+  function addTo(key, clip, item, withImage) {
+    var g = groupEls[key];
+    if (!g) { g = makeGroup(key, clip); groupEls[key] = g; film.appendChild(g.wrap); }
+    var f = makeFrame(item, withImage);
+    /* Every group must have one thumbnail marked shown from the moment it is
+       built, or a folded group would render empty until the next mark(). */
+    if (g.n === 0) f.className += ' shown';
+    g.body.appendChild(f);
+    g.n++; g.setCount(g.n);
+    return g;
+  }
+
+  function buildFilm() {
+    film.innerHTML = '';
+    groupEls = {};
+    var list = SHOTS.length ? SHOTS : CLIPS;
+    var withImage = !!SHOTS.length;
+    if (!list.length) {
+      film.innerHTML = '<div class="empty">no stills</div>';
+      return;
+    }
+    for (var i = 0; i < list.length; i++) {
+      var secs = (list[i].secs !== undefined) ? list[i].secs : list[i].start;
+      addTo(keyFor(secs), clipCovering(secs), list[i], withImage);
+    }
+  }
+
+  function setAll(v) {
+    PREF_COLLAPSE = v;
+    store(PREF_KEY, v ? 'yes' : 'no');
+    for (var k in groupEls) {
+      if (!groupEls.hasOwnProperty(k)) continue;
+      collapsed[k] = v;
+      paint(groupEls[k]);
+    }
+    /* Collapsing must not scroll to the selection: mark(true) reopens the
+       group holding it, which folded every group except the one being looked
+       at and read as the button doing nothing. */
+    mark(!v);
+    if (v) film.scrollTop = 0;
+  }
+
+  function groupOf(el) {
+    var n = el;
+    while (n && n !== film) {
+      if (n.getAttribute && n.getAttribute('data-key')) {
+        return groupEls[n.getAttribute('data-key')];
+      }
+      n = n.parentNode;
+    }
+    return null;
+  }
+
+  /* ---- live updates -------------------------------------------------------
+     Appending rather than rebuilding: during an incident this arrives once a
+     second, and a rebuild would throw away the scroll position and whatever
+     the person was looking at. Follow the newest frame only while they are
+     already on it -- the same courtesy tail -f extends. */
+  var following = true;
+  var drawScroll = false;
+
+  function poll() {
+    var x = new XMLHttpRequest();
+    x.open('GET', '/api/media?day=' + encodeURIComponent(DAY) +
+                  '&after=' + newest + '&t=' + (new Date()).getTime(), true);
+    x.onreadystatechange = function () {
+      if (x.readyState !== 4 || x.status !== 200) return;
+      var data;
+      try { data = JSON.parse(x.responseText); } catch (e) { return; }
+
+      OPEN_SINCE = data.open_since;
+      if (data.cutting !== undefined) CUTTING = data.cutting;
+
+      var clipsChanged = data.clips.length !== CLIPS.length;
+      CLIPS = data.clips;
+
+      var added = 0, i;
+      var fresh = (data.shots && data.shots.length) ? data.shots : [];
+      for (i = 0; i < fresh.length; i++) {
+        SHOTS.push(fresh[i]);
+        newest = fresh[i].secs;
+        added++;
+      }
+
+      if (clipsChanged) {
+        /* A cut finished, so stills that were loose now belong to a clip and
+           the groups have to be redrawn. Keep the scroll where it was: the
+           whole point of the strip is that it holds still. */
+        var at = film.scrollTop;
+        buildFilm();
+        film.scrollTop = at;
+      } else if (added) {
+        if (film.getElementsByClassName('empty')[0]) { buildFilm(); }
+        else {
+          for (i = 0; i < fresh.length; i++) {
+            addTo(keyFor(fresh[i].secs), clipCovering(fresh[i].secs), fresh[i], true);
+          }
+        }
+      }
+      if (added || clipsChanged) {
+        if (following && SHOTS.length) chosen = SHOTS[SHOTS.length - 1].secs;
+        /* Re-mark so the play markers appear as clips are cut. Not following
+           means the strip has grown under a view someone is reading: update
+           the markers, move nothing. */
+        if (following) draw(true); else mark(false);
+      }
+    };
+    x.send();
+  }
+  if (POLL_MS > 0) setInterval(poll, POLL_MS);
+
+  tabJpg.addEventListener('click', function (e) {
+    e.preventDefault(); tab = 'jpg';
+    tabJpg.className = 'on'; tabMp4.className = '';
+    modes.className = ''; draw(true);
+  }, false);
+  tabMp4.addEventListener('click', function (e) {
+    e.preventDefault(); tab = 'mp4';
+    tabMp4.className = 'on'; tabJpg.className = '';
+    modes.className = 'show'; draw(true);
+  }, false);
+  modeAnn.addEventListener('click', function (e) {
+    e.preventDefault(); videoMode = 'ann';
+    modeAnn.className = 'on'; modeFull.className = ''; showVideo();
+  }, false);
+  modeFull.addEventListener('click', function (e) {
+    e.preventDefault(); videoMode = 'full';
+    modeFull.className = 'on'; modeAnn.className = ''; showVideo();
+  }, false);
+
+  document.getElementById('day').addEventListener('change', function () {
+    window.location.href = '?day=' + encodeURIComponent(this.value);
+  }, false);
+
+  document.getElementById('collapse-all').addEventListener('click', function (e) {
+    e.preventDefault(); setAll(true);
+  }, false);
+  document.getElementById('expand-all').addEventListener('click', function (e) {
+    e.preventDefault(); setAll(false);
+  }, false);
+
+  /* ---- the drag divider ------------------------------------------------ */
+  var MINW = 120, MAXW = 640, DEFW = 190;
+
+  function setWidth(px) {
+    px = Math.max(MINW, Math.min(MAXW, Math.round(px)));
+    leftEl.style.webkitFlex = '0 0 ' + px + 'px';
+    leftEl.style.flex = '0 0 ' + px + 'px';
+    return px;
+  }
+
+  var savedW = parseInt(fetchStored(W_KEY), 10);
+  if (savedW) setWidth(savedW);
+
+  var dragging = false;
+
+  function dragTo(clientX) {
+    var box = wrapEl.getBoundingClientRect();
+    store(W_KEY, setWidth(clientX - box.left));
+  }
+  function startDrag() {
+    dragging = true;
+    grip.className = 'drag';
+    document.body.className += ' resizing';
+  }
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    grip.className = '';
+    document.body.className = document.body.className.replace(/ ?resizing/, '');
+  }
+
+  grip.addEventListener('mousedown', function (e) { e.preventDefault(); startDrag(); }, false);
+  document.addEventListener('mousemove', function (e) { if (dragging) dragTo(e.clientX); }, false);
+  document.addEventListener('mouseup', endDrag, false);
+
+  /* Touch, because the panel lives on a tablet. preventDefault on the move
+     stops the page rubber-banding under the finger mid-drag. */
+  grip.addEventListener('touchstart', function (e) { e.preventDefault(); startDrag(); }, false);
+  document.addEventListener('touchmove', function (e) {
+    if (dragging && e.touches && e.touches[0]) { e.preventDefault(); dragTo(e.touches[0].clientX); }
+  }, false);
+  document.addEventListener('touchend', endDrag, false);
+  document.addEventListener('touchcancel', endDrag, false);
+
+  grip.addEventListener('dblclick', function (e) {
+    e.preventDefault(); store(W_KEY, setWidth(DEFW));
+  }, false);
+
+  /* Scrolling the strip by hand means someone is looking for something, so
+     stop chasing the newest frame. Tapping the indicator resumes it. */
+  film.addEventListener('scroll', function () {
+    if (autoScrolling || !following) return;
+    var atEnd = (film.scrollTop + film.clientHeight) >= (film.scrollHeight - 12);
+    if (!atEnd) {
+      following = false;
+      var ind = document.getElementById('live');
+      if (ind) { ind.innerHTML = 'paused'; ind.className = 'off'; }
+    }
+  }, false);
+
+  /* Tapping the indicator resumes following the newest frame. */
+  caption.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'live') {
+      following = true;
+      if (SHOTS.length) chosen = SHOTS[SHOTS.length - 1].secs;
+      draw(true);
+    }
+  }, false);
+
+  buildFilm();
+  draw(true);
+})();
+</script>
+{% endblock %}
