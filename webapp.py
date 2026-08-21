@@ -24,6 +24,7 @@ WebRTC. An <img> fed a multipart stream works in browsers far older than
 anything else under discussion.
 """
 
+import copy
 import datetime as dt
 import functools
 import hashlib
@@ -36,6 +37,10 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+import yaml
+
+import config as config_mod
 
 from flask import (Flask, Response, abort, jsonify, redirect,
                    render_template, request, send_from_directory, url_for)
@@ -415,10 +420,67 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             networks=", ".join(str(n) for n in settings.trusted_networks)
                      if settings is not None else "",
             client_ip=request.remote_addr or "",
+            sys_err="", sys_msg="",
+            fields=_system_fields(),
+            raw_yaml=_overrides_yaml(),
+            has_overrides=bool(settings is not None
+                               and settings.config_overrides),
+            disk=_disk_report(),
             likely=[], rest=[], active=set(), overridden=False,
             defaults=sorted(cfg.trigger_classes), saved="")
         ctx.update(extra)
         return render_template("settings.html", **ctx)
+
+    def _system_fields():
+        """Each field with its effective value and where that value came from.
+
+        Knowing whether a number is the shipped default, this board's config,
+        or something typed here is most of what makes the page safe to use.
+        """
+        ov = settings.config_overrides if settings is not None else {}
+        out = []
+        for path, label, kind, hint in SYSTEM_FIELDS:
+            here = _dotted(ov, path)
+            effective = _dotted(cfg.raw, path)
+            out.append({
+                "path": path, "label": label, "kind": kind, "hint": hint,
+                "value": "" if here is None else here,
+                "effective": "" if effective is None else effective,
+                "overridden": here is not None,
+            })
+        return out
+
+    def _overrides_yaml():
+        ov = settings.config_overrides if settings is not None else {}
+        if not ov:
+            return ""
+        return yaml.safe_dump(ov, default_flow_style=False, sort_keys=True)
+
+    def _disk_report():
+        """Where the recordings are and how much room is left."""
+        import shutil as _shutil
+        rows, seen = [], set()
+        for name, p in (("clips", cfg.events_root),
+                        ("stills", cfg.detections_root),
+                        ("working", cfg.tier("main").path)):
+            try:
+                total = sum(f.stat().st_size
+                            for f in p.rglob("*") if f.is_file())
+                n = sum(1 for f in p.rglob("*") if f.is_file())
+            except OSError:
+                total, n = 0, 0
+            rows.append({"name": name, "path": str(p),
+                         "bytes": total, "size": _human(total), "files": n})
+            seen.add(str(p))
+        try:
+            u = _shutil.disk_usage(str(cfg.events_root.parent))
+            disk = {"total": _human(u.total), "free": _human(u.free),
+                    "used": _human(u.used),
+                    "pct": int(round(100.0 * u.used / u.total)) if u.total else 0,
+                    "root": str(cfg.events_root.parent)}
+        except OSError:
+            disk = None
+        return {"rows": rows, "disk": disk}
 
     def _current_user():
         if settings is not None and settings.has_credentials():
@@ -458,6 +520,132 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                     msg = "changed"
 
         return _settings_page("credentials", cred_err=err, cred_msg=msg)
+
+    # The fields worth a labelled box rather than raw yaml. Everything else
+    # is reachable through the editor below; these are the ones people
+    # actually change, and the ones worth validating by hand.
+    SYSTEM_FIELDS = (
+        ("camera.host", "Camera address", "text",
+         "the camera's IP or hostname"),
+        ("camera.http_port", "Camera HTTP port", "number",
+         "the CGI/ONVIF port, often 88 or 80"),
+        ("camera.rtsp_port", "Camera RTSP port", "number",
+         "only if RTSP is not on the port above"),
+        ("camera.main_path", "Main stream path", "text",
+         "full resolution -- this is what is recorded and kept"),
+        ("camera.sub_path", "Sub stream path", "text",
+         "low resolution -- this is what the detector reads, so it can run "
+         "at a sensible frame rate"),
+        ("paths.events_root", "Clips directory", "text",
+         "finished event clips; give it its own volume"),
+        ("paths.detections_root", "Stills directory", "text",
+         "one annotated JPEG a second while triggered"),
+        ("paths.recordings_root", "Working directory", "text",
+         "the rolling minutes; high write volume"),
+        ("retention.target_free_percent", "Keep free (%)", "number",
+         "delete oldest first to hold this much of the disk free"),
+        ("detection.conf_threshold", "Confidence threshold", "text",
+         "0-1; higher means fewer, surer detections"),
+        ("detection.target_fps", "Detector frames/second", "text",
+         "how often the NPU is asked; the camera keeps recording regardless"),
+    )
+
+    def _set(tree, path, value):
+        parts = path.split(".")
+        node = tree
+        for p in parts[:-1]:
+            if not isinstance(node.get(p), dict):
+                node[p] = {}
+            node = node[p]
+        node[parts[-1]] = value
+
+    def _unset(tree, path):
+        """Remove the key, and any section it leaves empty behind it."""
+        parts = path.split(".")
+        chain, node = [], tree
+        for p in parts[:-1]:
+            if not isinstance(node.get(p), dict):
+                return
+            chain.append((node, p))
+            node = node[p]
+        node.pop(parts[-1], None)
+        for parent, key in reversed(chain):
+            if isinstance(parent.get(key), dict) and not parent[key]:
+                del parent[key]
+
+    def _dotted(tree, path, default=None):
+        node = tree
+        for p in path.split("."):
+            if not isinstance(node, dict) or p not in node:
+                return default
+            node = node[p]
+        return node
+
+    def _try_config(overrides):
+        """Load the config with these overrides. Returns (cfg, error)."""
+        try:
+            return config_mod.load(overrides=overrides,
+                                   require_password=False), ""
+        except Exception as e:
+            return None, str(e)
+
+    @app.route("/settings/system", methods=["GET", "POST"])
+    @protected
+    def settings_system():
+        err = msg = ""
+        ov = settings.config_overrides if settings is not None else {}
+
+        if request.method == "POST":
+            if settings is None:
+                abort(503)
+            proposed = copy.deepcopy(ov)
+
+            if request.form.get("raw") is not None:
+                # The escape hatch: anything at all, as yaml.
+                text = request.form.get("raw") or ""
+                try:
+                    parsed = yaml.safe_load(text) or {}
+                except yaml.YAMLError as e:
+                    parsed, err = None, "That is not valid YAML: %s" % e
+                if parsed is not None and not isinstance(parsed, dict):
+                    parsed, err = None, "The top level has to be a mapping."
+                if parsed is not None:
+                    proposed = config_mod.strip_secrets(parsed)
+            else:
+                for path, label, kind, _hint in SYSTEM_FIELDS:
+                    raw = (request.form.get(path) or "").strip()
+                    if raw == "":
+                        _unset(proposed, path)
+                        continue
+                    val = raw
+                    if kind == "number" or path in (
+                            "detection.conf_threshold", "detection.target_fps"):
+                        try:
+                            val = float(raw) if "." in raw else int(raw)
+                        except ValueError:
+                            err = "%s must be a number." % label
+                            break
+                    _set(proposed, path, val)
+
+            if not err:
+                # Never store something the service cannot start with.
+                trial, why = _try_config(proposed)
+                if trial is None:
+                    err = "That would stop the service starting: %s" % why
+                else:
+                    settings.set_config_overrides(proposed)
+                    ov = settings.config_overrides
+                    msg = "saved"
+
+        return _settings_page("system", sys_err=err, sys_msg=msg)
+
+    @app.route("/settings/system/reset", methods=["POST"])
+    @protected
+    def settings_system_reset():
+        if settings is None:
+            abort(503)
+        settings.clear_config_overrides()
+        return redirect(url_for("settings_system"))
 
     @app.route("/settings/access", methods=["POST"])
     @protected

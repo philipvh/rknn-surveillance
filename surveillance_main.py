@@ -66,11 +66,29 @@ def main(argv=None):
     setup_logging()
     log = logging.getLogger("main")
 
+    # Two passes. The settings store lives beside the recordings, and where
+    # that is comes from the config -- but the config's last layer is the
+    # settings store. So: load once to find the store, read it, load again
+    # with its overrides applied. The first load is discarded.
     try:
-        cfg = config.load()
+        bootstrap = config.load()
+        user_settings = Settings(
+            bootstrap.events_root.parent / "settings.json",
+            defaults={"trigger_classes": sorted(bootstrap.trigger_classes)})
+        overrides = user_settings.config_overrides
+        cfg = config.load(overrides=overrides) if overrides else bootstrap
     except config.ConfigError as e:
         log.error("%s", e)
         return 2
+
+    if overrides:
+        log.info("config overrides from the panel: %s",
+                 ", ".join(sorted(overrides)))
+        # The store may have moved with the overrides -- if the data root was
+        # changed, settings.json belongs at the new one from now on.
+        if cfg.events_root.parent != bootstrap.events_root.parent:
+            log.warning("the data root moved to %s; the settings file follows "
+                        "it on the next start", cfg.events_root.parent)
 
     # Before anything is written with a timestamp on it.
     clock_guard = ClockGuard(cfg.resolve(
@@ -103,12 +121,6 @@ def main(argv=None):
     health = HealthMonitor(cfg, recorders=recorders, clock_guard=clock_guard,
                            notifier=notifier)
 
-    # Anything the operator changes from the panel. It lives beside the
-    # recordings rather than in the project directory, so a deploy cannot
-    # overwrite it and a reinstall does not lose it.
-    user_settings = Settings(
-        cfg.events_root.parent / "settings.json",
-        defaults={"trigger_classes": sorted(cfg.trigger_classes)})
     if user_settings.overridden("trigger_classes"):
         log.info("trigger classes overridden from the panel: %s",
                  sorted(user_settings.trigger_classes))

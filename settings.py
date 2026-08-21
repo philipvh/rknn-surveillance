@@ -27,6 +27,7 @@ takes effect immediately rather than at the next restart.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import ipaddress
@@ -343,3 +344,54 @@ class Settings:
                     changed = True
             if changed:
                 self._save()
+
+    # ----------------------------------------------------------- overrides
+    # Values that belong to config.yaml but were set from the panel. They are
+    # kept here rather than written back into the yaml because config.yaml is
+    # overwritten by every deploy and config.local.yaml is hand-written with
+    # comments that a machine rewrite would destroy.
+    @property
+    def config_overrides(self):
+        v = self.get("config")
+        return v if isinstance(v, dict) else {}
+
+    def set_config_overrides(self, tree):
+        """Replace the whole override tree. Empty sections are dropped."""
+        if not isinstance(tree, dict):
+            raise ValueError("the overrides must be a mapping")
+        clean = {k: v for k, v in tree.items()
+                 if not (isinstance(v, dict) and not v)}
+        with self._lock:
+            if clean:
+                self._data["config"] = clean
+            else:
+                self._data.pop("config", None)
+            self._save()
+            self._mtime = self._stamp()
+            self.revision += 1
+        return clean
+
+    def set_config_value(self, path, value):
+        """Set one dotted key, e.g. "camera.host". None removes it."""
+        parts = [p for p in str(path).split(".") if p]
+        if not parts:
+            raise ValueError("an empty setting name")
+        tree = copy.deepcopy(self.config_overrides)
+        node = tree
+        for p in parts[:-1]:
+            if not isinstance(node.get(p), dict):
+                node[p] = {}
+            node = node[p]
+        if value is None:
+            node.pop(parts[-1], None)
+        else:
+            node[parts[-1]] = value
+        return self.set_config_overrides(tree)
+
+    def clear_config_overrides(self):
+        with self._lock:
+            if "config" in self._data:
+                del self._data["config"]
+                self._save()
+                self._mtime = self._stamp()
+                self.revision += 1

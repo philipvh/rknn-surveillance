@@ -17,7 +17,8 @@
 The claim that matters: no sequence of presses can leave a motor running, and
 nothing the panel does bypasses the motor budget or the deadline watchdog.
 """
-import base64, datetime as dt, os, sys, tempfile, unittest
+import base64
+import json, datetime as dt, os, sys, tempfile, unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -897,6 +898,111 @@ class TestAccessModes(Base):
         self.assertIn("192.168.90.77", r.data.decode())
         self.assertIn("192.168.90.0/24", r.data.decode(),
                       "it should suggest the matching /24")
+
+
+
+
+class TestSystemSettings(Base):
+    """Editing config from the panel. This one can stop the service starting."""
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def post(self, **fields):
+        return self.c.post("/settings/system", data=fields,
+                           headers=self.auth())
+
+    def test_the_page_renders_with_the_effective_values(self):
+        r = self.c.get("/settings/system", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        body = r.data.decode()
+        self.assertIn("camera.sub_path", body)
+        self.assertIn("Storage", body)
+
+    def test_setting_a_field_is_stored_as_an_override(self):
+        self.post(**{"camera.sub_path": "livestream/13"})
+        self.assertEqual(
+            self.store.config_overrides.get("camera", {}).get("sub_path"),
+            "livestream/13")
+
+    def test_an_empty_box_removes_the_override(self):
+        self.post(**{"camera.sub_path": "livestream/13"})
+        self.post(**{"camera.sub_path": ""})
+        self.assertEqual(self.store.config_overrides, {},
+                         "and the empty camera section goes with it")
+
+    def test_numbers_are_stored_as_numbers_not_strings(self):
+        self.post(**{"retention.target_free_percent": "25"})
+        v = self.store.config_overrides["retention"]["target_free_percent"]
+        self.assertEqual(v, 25)
+        self.assertNotIsInstance(v, str, "yaml would quote it back")
+
+    def test_a_non_number_in_a_number_field_is_refused(self):
+        r = self.post(**{"retention.target_free_percent": "lots"})
+        self.assertIn("must be a number", r.data.decode())
+        self.assertEqual(self.store.config_overrides, {})
+
+    def test_a_value_that_would_not_load_is_refused(self):
+        # 150% free is outside the range config.py validates.
+        r = self.post(**{"retention.target_free_percent": "150"})
+        self.assertIn("stop the service starting", r.data.decode())
+        self.assertEqual(self.store.config_overrides, {},
+                         "the whole point: never store something unstartable")
+
+    def test_raw_yaml_replaces_the_override_set(self):
+        self.post(**{"camera.sub_path": "livestream/13"})
+        self.post(raw="retention:\n  target_free_percent: 30\n")
+        ov = self.store.config_overrides
+        self.assertEqual(ov, {"retention": {"target_free_percent": 30}},
+                         "the editor shows the whole set, so it replaces it")
+
+    def test_broken_yaml_is_refused(self):
+        r = self.post(raw="camera:\n  host: [unclosed\n")
+        self.assertIn("not valid YAML", r.data.decode())
+        self.assertEqual(self.store.config_overrides, {})
+
+    def test_a_yaml_scalar_at_the_top_level_is_refused(self):
+        r = self.post(raw="just a string")
+        self.assertIn("mapping", r.data.decode())
+
+    def test_a_password_in_the_yaml_is_dropped_not_stored(self):
+        self.post(raw="camera:\n  host: 10.0.0.9\n  password: hunter2\n")
+        ov = self.store.config_overrides
+        self.assertEqual(ov.get("camera", {}).get("host"), "10.0.0.9")
+        self.assertNotIn("password", ov.get("camera", {}),
+                         "secrets belong in secrets.yaml, mode 600")
+        self.assertNotIn("hunter2", json.dumps(ov))
+
+    def test_reset_forgets_everything(self):
+        self.post(**{"camera.sub_path": "livestream/13"})
+        self.assertEqual(
+            self.c.post("/settings/system/reset", headers=self.auth()
+                        ).status_code, 302)
+        self.assertEqual(self.store.config_overrides, {})
+
+    def test_it_needs_authentication(self):
+        self.assertEqual(self.c.get("/settings/system").status_code, 401)
+        self.assertEqual(
+            self.c.post("/settings/system",
+                        data={"camera.host": "1.2.3.4"}).status_code, 401)
+        self.assertEqual(self.store.config_overrides, {})
+
+    def test_the_overrides_actually_reach_a_loaded_config(self):
+        import config as config_mod
+        self.post(**{"camera.sub_path": "livestream/13"})
+        cfg2 = config_mod.load(self.cfg.path,
+                               overrides=self.store.config_overrides,
+                               require_password=False)
+        self.assertEqual(cfg2.raw["camera"]["sub_path"], "livestream/13",
+                         "storing it is only useful if it is read back")
 
 
 if __name__ == "__main__":

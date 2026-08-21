@@ -27,6 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
+import copy
 import os
 
 import yaml
@@ -269,13 +270,31 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def load(config_path=None, secrets_path=None, require_password=True,
-         local_path=None) -> Config:
-    """Load config.yaml, overlay config.local.yaml and secrets.yaml.
+SECRET_KEYS = (("camera", "password"), ("web", "password"), ("link", "psk"))
 
-    Three layers, in order: the deployed defaults, whatever is particular to
-    this board, and the secrets. Only the first is ever overwritten by a
-    deploy, so editing the camera's address on the board sticks.
+
+def strip_secrets(tree):
+    """Remove anything that belongs in secrets.yaml. Returns a new dict.
+
+    The panel writes its overrides to a file that is not mode 600 and that
+    gets shown back on a settings page. A password must never end up there,
+    so they are removed on the way in rather than trusted not to appear.
+    """
+    out = copy.deepcopy(tree) if isinstance(tree, dict) else {}
+    for section, key in SECRET_KEYS:
+        if isinstance(out.get(section), dict):
+            out[section].pop(key, None)
+    return out
+
+
+def load(config_path=None, secrets_path=None, require_password=True,
+         local_path=None, overrides=None) -> Config:
+    """Load config.yaml, overlay config.local.yaml, panel overrides, secrets.
+
+    Four layers, in order: the deployed defaults, whatever is particular to
+    this board, whatever was set from the panel, and the secrets. Only the
+    first is ever overwritten by a deploy, so a change made on the board
+    sticks. Secrets are last because nothing may shadow them.
     """
     config_path = Path(config_path or os.environ.get("RKNN_CONFIG", DEFAULT_CONFIG))
     secrets_path = Path(secrets_path or os.environ.get("RKNN_SECRETS", DEFAULT_SECRETS))
@@ -288,6 +307,9 @@ def load(config_path=None, secrets_path=None, require_password=True,
     if local_path.exists():
         overlay = yaml.safe_load(local_path.read_text()) or {}
         raw = _deep_merge(raw, overlay)
+
+    if overrides:
+        raw = _deep_merge(raw, strip_secrets(overrides))
 
     if secrets_path.exists():
         mode = secrets_path.stat().st_mode & 0o077

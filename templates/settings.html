@@ -43,6 +43,21 @@ h3 { margin:20px 0 8px; font-size:11px; letter-spacing:.14em;
   background:#0f1714; color:#dfe7e1; border:1px solid #2f3f38; }
 .field .sub { display:block; font-size:12px; color:#6d8378; margin-top:4px; }
 code { color:#9fd8bf; font-family:monospace; }
+.field.set input { border-color:#3f8a6c; }
+.field { max-width:34em; }
+textarea { width:100%; max-width:52em; font-family:monospace; font-size:14px;
+  padding:10px; background:#0f1714; color:#dfe7e1; border:1px solid #2f3f38;
+  line-height:1.5; }
+.bar { max-width:34em; height:12px; background:#0f1714;
+  border:1px solid #2f3f38; }
+.bar .fill { height:100%; background:#2f6a53; }
+.sub { color:#6d8378; font-size:12px; }
+.table-wrap { overflow-x:auto; max-width:52em; margin:10px 0 4px; }
+.tbl { border-collapse:collapse; font-size:13px; }
+.tbl th { text-align:left; color:#6d8378; font-weight:normal;
+  padding:5px 14px 5px 0; border-bottom:1px solid #24322c; }
+.tbl td { padding:5px 14px 5px 0; border-bottom:1px solid #1d2925;
+  color:#b9c8c0; }
 .note.warn { border-color:#7a5a2a; color:#e0a64a; background:#1a1510; }
 .mode { display:-webkit-flex; display:flex; margin:0 0 10px 0; padding:12px;
   background:#131c18; border:1px solid #24322c; max-width:46em;
@@ -57,7 +72,90 @@ code { color:#9fd8bf; font-family:monospace; }
   <a href="{{ url_for('settings_page') }}"
      class="{% if tab == 'classes' %}on{% endif %}">Categories</a>
   <a href="{{ url_for('settings_credentials') }}"
-     class="{% if tab == 'credentials' %}on{% endif %}">Credentials</a>
+     class="{% if tab == 'system' %}
+{% if not editable %}
+<div class="note">This process is serving recordings only, so nothing here can
+be changed. Start the surveillance service.</div>
+{% else %}
+
+{% if sys_msg == 'saved' %}
+<div class="note ok"><b>Saved.</b> Most of these are read when the service
+starts, so <b>restart it</b> before they take effect. The configuration was
+loaded once with these values before saving, so it will start.</div>
+{% elif sys_err %}
+<div class="note err">{{ sys_err }}</div>
+{% endif %}
+
+{% if disk.disk %}
+<h3>Storage</h3>
+<p id="hint">Recordings live at <code>{{ disk.disk.root }}</code>.
+{{ disk.disk.free }} free of {{ disk.disk.total }}.</p>
+<div class="bar"><div class="fill" style="width:{{ disk.disk.pct }}%"></div></div>
+<p class="sub" style="margin-top:4px">{{ disk.disk.pct }}% used</p>
+<div class="table-wrap">
+  <table class="tbl">
+    <tr><th>What</th><th>Where</th><th>Files</th><th>Size</th></tr>
+    {% for r in disk.rows %}
+    <tr><td>{{ r.name }}</td><td><code>{{ r.path }}</code></td>
+        <td>{{ r.files }}</td><td>{{ r.size }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('settings_system') }}">
+  <h3>Camera and streams</h3>
+  <p id="hint">Leave a box empty to use the configured value shown beneath it.
+  The <b>sub stream</b> is what the detector reads and the <b>main stream</b>
+  is what gets recorded &mdash; pointing both at full resolution is the usual
+  way to make the NPU the bottleneck.</p>
+
+  {% for f in fields %}
+  <div class="field {% if f.overridden %}set{% endif %}">
+    <label for="{{ f.path }}">{{ f.label }}</label>
+    <input type="{{ 'number' if f.kind == 'number' else 'text' }}"
+           id="{{ f.path }}" name="{{ f.path }}" value="{{ f.value }}"
+           placeholder="{{ f.effective }}"
+           autocapitalize="none" autocorrect="off" spellcheck="false">
+    <span class="sub"><code>{{ f.path }}</code> &mdash; {{ f.hint }}<br>
+      now: <b>{{ f.effective if f.effective != '' else '(unset)' }}</b>
+      {% if f.overridden %}&nbsp;&middot;&nbsp;set here{% endif %}</span>
+  </div>
+  {% endfor %}
+
+  <div id="actions"><button type="submit">Save</button></div>
+</form>
+
+<h3>Anything else</h3>
+<p id="hint">Everything in <code>config.yaml</code> can be overridden here, as
+YAML. This replaces the whole override set, so what you see is what will be
+stored. It is loaded and checked before it is saved &mdash; a value that would
+stop the service starting is refused rather than written.
+Passwords are ignored: those belong in <code>secrets.yaml</code>.</p>
+<form method="post" action="{{ url_for('settings_system') }}">
+  <textarea name="raw" id="raw" rows="12" spellcheck="false"
+            placeholder="camera:&#10;  sub_path: livestream/13&#10;retention:&#10;  target_free_percent: 25">{{ raw_yaml }}</textarea>
+  <div id="actions"><button type="submit">Save YAML</button></div>
+</form>
+
+{% if has_overrides %}
+<form method="post" action="{{ url_for('settings_system_reset') }}">
+  <p style="color:#6d8378;font-size:13px">
+    These values were set from this panel.
+    <button type="submit" style="font-size:13px;padding:8px 12px;
+      background:#1b2721;color:#8fa39a;border:1px solid #2f3f38;">
+      Forget them all</button>
+  </p>
+</form>
+{% else %}
+<p style="color:#6d8378;font-size:13px">Nothing is overridden; the values come
+from <code>config.yaml</code> and <code>config.local.yaml</code>.</p>
+{% endif %}
+
+{% endif %}
+{% elif tab == 'credentials' %}on{% endif %}">Credentials</a>
+  <a href="{{ url_for('settings_system') }}"
+     class="{% if tab == 'system' %}on{% endif %}">System</a>
 </div>
 
 {% if tab == 'credentials' %}
