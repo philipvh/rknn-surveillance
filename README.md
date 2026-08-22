@@ -113,6 +113,7 @@ false alarms — see [the write-up](#the-write-up).
 | `link.py` `uplink.py` `transports.py` `receiver.py` | the radio link |
 | `settings.py` `settings_cli.py` | panel-editable settings, and the shell rescue |
 | `doctor.py` | one command that says whether this install is healthy |
+| `setup_network.sh` `wan_ports.sh` `camera_ui.sh` | the camera segment, and reaching it over the tunnel |
 
 ## Tests
 
