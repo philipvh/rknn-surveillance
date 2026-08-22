@@ -26,10 +26,19 @@
 # panel has to work with no internet at all.
 set -uo pipefail
 
+# nmcli and iw live in /usr/sbin and /usr/bin. Run from the panel this arrives
+# through systemd with a minimal PATH, and a bare `command -v iw` then reports
+# the tool missing while it is installed -- which is exactly what happened, and
+# sent an evening chasing a regulatory domain that was never the problem.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 AP_SSID="${AP_SSID:-tvw-camera}"
 AP_PASS="${AP_PASS:-}"                     # empty -> read from ap-secret file
 AP_SECRET="${AP_SECRET:-/etc/rknn-ap-password}"
 AP_NET="${AP_NET:-192.168.92}"
+AP_COUNTRY="${AP_COUNTRY:-NL}"             # regulatory domain
+AP_CHANNEL="${AP_CHANNEL:-6}"              # 1, 6 or 11; 0 to let it choose
 AP_CON="${AP_CON:-rknn-ap}"
 PANEL_PORT="${PANEL_PORT:-8081}"
 
@@ -104,7 +113,31 @@ ap)
   fi
   [ ${#AP_PASS} -ge 8 ] || die "the access point password must be 8+ characters"
 
-  say "Configuring '${AP_SSID}' on ${DEV} at ${AP_NET}.1"
+  # Set the country because it is right, not because it fixes anything: the
+  # world domain permits an AP on channel 6 regardless (2402-2472 carries no
+  # NO-IR flag), so this was not the cause of the handshake failure above.
+  # Kept because operating on a real regulatory domain is correct.
+  if command -v iw >/dev/null 2>&1; then
+    iw reg set "$AP_COUNTRY" 2>/dev/null && say "Regulatory domain: ${AP_COUNTRY}"
+  else
+    say "WARNING: iw is not installed, so the regulatory domain stays 'world'."
+    say "         Clients may see the network and fail to join. Install it:"
+    say "             sudo apt-get install -y iw"
+  fi
+  # Persist it, or the next boot is back to world roaming.
+  printf 'options cfg80211 ieee80211_regdom=%s\n' "$AP_COUNTRY" \
+    > /etc/modprobe.d/cfg80211-regdom.conf
+
+  # WPA2 has to be pinned, not negotiated. Left to itself this radio offers a
+  # set the client accepts and then never completes the four-way handshake:
+  # the network appears, association succeeds, and the client reports a wrong
+  # password. Proved by making it open, at which point tablets joined at once.
+  #
+  #   proto rsn        WPA2 only, no WPA1 fallback
+  #   pairwise/group   AES-CCMP both ways, so TKIP is never negotiated
+  #   pmf 1            protected management frames off -- advertised here and
+  #                    not honoured, which is what breaks the handshake
+  say "Configuring '${AP_SSID}' on ${DEV} at ${AP_NET}.1 (channel ${AP_CHANNEL})"
   nmcli connection delete "$AP_CON" >/dev/null 2>&1 || true
   nmcli connection add type wifi ifname "$DEV" con-name "$AP_CON" \
       autoconnect no ssid "$AP_SSID" >/dev/null \
@@ -112,7 +145,12 @@ ap)
   nmcli connection modify "$AP_CON" \
       802-11-wireless.mode ap \
       802-11-wireless.band bg \
+      802-11-wireless.channel "$AP_CHANNEL" \
       802-11-wireless-security.key-mgmt wpa-psk \
+      802-11-wireless-security.proto rsn \
+      802-11-wireless-security.pairwise ccmp \
+      802-11-wireless-security.group ccmp \
+      802-11-wireless-security.pmf 1 \
       802-11-wireless-security.psk "$AP_PASS" \
       ipv4.method shared \
       ipv4.addresses "${AP_NET}.1/24" \

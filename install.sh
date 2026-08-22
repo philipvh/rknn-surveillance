@@ -35,7 +35,9 @@ sudo apt-get install -y \
   python3-numpy \
   gpiod \
   python3-libgpiod \
-  openvpn
+  openvpn \
+  iw \
+  wireless-regdb
 
 # yolov10.py needs torch: dfl() and post_process_yolov10() use softmax, topk,
 # gather and cat. The old install.sh never installed it, so a clean board would

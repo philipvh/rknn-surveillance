@@ -304,18 +304,18 @@ class TestAccessPointPassword(unittest.TestCase):
 
     def test_it_is_handed_over_in_a_file_not_the_request_line(self):
         import wifi
-        wifi.set_ap_password("clubhouse2026")
+        wifi.set_ap_password("not-a-real-password")
         self.assertEqual(self.asked, ["wifi setpass"])
         for line in self.asked:
-            self.assertNotIn("clubhouse2026", line,
+            self.assertNotIn("not-a-real-password", line,
                              "the request line is world-readable")
-        self.assertEqual(self.handed_over(), "clubhouse2026")
+        self.assertEqual(self.handed_over(), "not-a-real-password")
 
     def test_the_file_is_not_readable_by_others(self):
         import os
         import stat
         import wifi
-        wifi.set_ap_password("clubhouse2026")
+        wifi.set_ap_password("not-a-real-password")
         mode = os.stat(Path(self.dir) / "ap-password").st_mode
         self.assertEqual(stat.S_IMODE(mode) & 0o077, 0,
                          "a password other users can read is not a password")
@@ -345,14 +345,14 @@ class TestAccessPointPassword(unittest.TestCase):
     def test_a_refusal_from_root_removes_the_handover_file(self):
         import wifi
         self.vpn.ask = lambda line, timeout=45.0, verb="do": (False, "nope")
-        ok, _ = wifi.set_ap_password("clubhouse2026")
+        ok, _ = wifi.set_ap_password("not-a-real-password")
         self.assertFalse(ok)
         self.assertIsNone(self.handed_over(),
                           "a password must not be left lying in /run")
 
     def test_it_warns_that_joined_devices_need_the_new_one(self):
         import wifi
-        _, msg = wifi.set_ap_password("clubhouse2026")
+        _, msg = wifi.set_ap_password("not-a-real-password")
         self.assertIn("will need it again", msg)
 
 
