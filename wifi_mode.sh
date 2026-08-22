@@ -69,6 +69,47 @@ show() {
   fi
 }
 
+# Make the chosen mode survive a reboot.
+#
+# NetworkManager decides what claims the radio at boot from autoconnect alone,
+# and nothing else here writes it -- so without this the access point exists
+# only for as long as nobody power-cycles the board. At the club that means the
+# wall tablet loses the panel on the first power cut, with no way back that
+# does not involve someone bringing a laptop and an ssh key.
+#
+# The mode is a deployment decision, so it is stored as one: whichever mode was
+# last chosen is the one that comes back.
+prefer() {
+  local mode="$1" want="${2:-}" line name typ on prio
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    # TYPE never contains a colon; a network called "Bar : Grill" does.
+    typ="${line##*:}"
+    name="${line%:*}"
+    name="${name//\\:/:}"          # nmcli -t escapes the separator; undo it
+    case "$typ" in 802-11-wireless|wifi) ;; *) continue ;; esac
+    if [ "$mode" = ap ]; then
+      [ "$name" = "$AP_CON" ] && on=yes || on=no
+    else
+      [ "$name" = "$AP_CON" ] && on=no || on=yes
+    fi
+    prio=0
+    if [ "$on" = yes ] && { [ "$mode" = ap ] || [ "$name" = "$want" ]; }; then
+      prio=100
+    fi
+    nmcli connection modify "$name" \
+      connection.autoconnect "$on" \
+      connection.autoconnect-priority "$prio" >/dev/null 2>&1 || true
+  done <<EOF
+$(nmcli -t -f NAME,TYPE connection show 2>/dev/null)
+EOF
+  if [ "$mode" = ap ]; then
+    say "After a reboot the radio comes back as the access point"
+  else
+    say "After a reboot the radio comes back as a client"
+  fi
+}
+
 case "${1:-status}" in
 status) show; exit 0 ;;
 esac
@@ -94,6 +135,7 @@ client)
     nmcli device set "$DEV" managed yes >/dev/null 2>&1 || true
     nmcli device connect "$DEV" >/dev/null 2>&1 || true
   fi
+  prefer client "$WANT"
   sleep 4
   echo; show
   ;;
@@ -171,6 +213,8 @@ EOF
   say "Bringing it up"
   nmcli connection up "$AP_CON" >/dev/null 2>&1 \
     || die "the access point did not start; see: journalctl -u NetworkManager"
+
+  prefer ap
 
   sleep 3
   echo; show
