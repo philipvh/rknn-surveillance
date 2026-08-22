@@ -94,6 +94,11 @@ capture:
 
 retention:
   target_free_percent: 20  # keep at least this much of the disk free
+  # When even deleting everything unprotected will not reach that, take the
+  # oldest protected data too. A camera that has stopped recording because the
+  # disk is full is a worse outcome than one that has lost its oldest footage:
+  # the first is unbounded and silent, the second is bounded and logged.
+  purge_protected_when_full: true
   check_interval_s: 300
 
 paths:

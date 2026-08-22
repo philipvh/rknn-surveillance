@@ -61,16 +61,24 @@ class Deletion:
 
 
 def plan_deletions(candidates, *, now, free_bytes, total_bytes,
-                   target_free_ratio, pinned=frozenset(), min_age_s=0.0):
+                   target_free_ratio, pinned=frozenset(), min_age_s=0.0,
+                   purge_protected=True):
     """Return (deletions, warnings). Pure -- no filesystem access.
 
-    Two passes:
+    Three passes:
       1. Age. Every tier obeys its own max_age_days, protected or not.
-      2. Pressure. If the disk is still fuller than we want, delete oldest-first
-         from unprotected tiers in config order. Protected tiers are never
-         touched here, even if that means the target is not met -- in which case
-         a warning comes back, because a full disk is a problem to fix, not a
-         reason to throw away the only evidence of a break-in.
+      2. Pressure. Delete oldest-first from unprotected tiers, in config order.
+      3. Last resort. If the disk is still fuller than the target, take the
+         oldest protected data too, oldest first, until it is not.
+
+    Pass 3 deletes evidence, so it is worth saying why it exists. Without it a
+    full disk means the recorder stops: no clips, no stills, nothing, and the
+    only sign is a warning in a log nobody reads. Losing the oldest week of
+    footage is a smaller loss than recording nothing from today onwards, and
+    unlike the second failure it is bounded and visible.
+
+    Set purge_protected=False to keep the older behaviour, where a full disk
+    stops the system rather than dropping anything protected.
     """
     deletions, warnings = [], []
     doomed = set()
@@ -106,13 +114,34 @@ def plan_deletions(candidates, *, now, free_bytes, total_bytes,
             shortfall -= c.size
             deletions.append(Deletion(c.path, "pressure", c.tier_name, c.size))
 
+        # ---- pass 3: the oldest protected data, rather than stop recording ----
+        if shortfall > 0 and purge_protected:
+            keep = [c for c in candidates
+                    if c.protected and c.path not in doomed and eligible(c)]
+            keep.sort(key=lambda c: c.mtime)          # oldest first, across tiers
+            took = 0
+            for c in keep:
+                if shortfall <= 0:
+                    break
+                doomed.add(c.path)
+                shortfall -= c.size
+                took += c.size
+                deletions.append(
+                    Deletion(c.path, "pressure (protected)", c.tier_name, c.size))
+            if took:
+                warnings.append(
+                    f"disk was full: dropped {_h(took)} of the oldest protected "
+                    f"data to stay under {1 - target_free_ratio:.0%}. The disk "
+                    f"is too small for the retention policy, or the camera is "
+                    f"recording more than expected.")
+
         if shortfall > 0:
             protected_left = sum(
                 c.size for c in candidates
                 if c.protected and c.path not in doomed and eligible(c))
             warnings.append(
                 f"disk still {_h(shortfall)} short of the {target_free_ratio:.0%} "
-                f"free target after deleting everything unprotected. "
+                f"free target after deleting everything that may be deleted. "
                 f"{_h(protected_left)} of protected data was left alone. "
                 f"Fix the disk -- do not widen the policy.")
 
@@ -188,6 +217,8 @@ def run_once(cfg, pinned=frozenset(), dry_run=False, now=None):
         candidates, now=now, free_bytes=free, total_bytes=total,
         target_free_ratio=cfg.target_free_ratio, pinned=pinned,
         min_age_s=cfg.segment_seconds + IN_FLIGHT_MARGIN_S,
+        purge_protected=bool(cfg._get("retention", "purge_protected_when_full",
+                                      default=True)),
     )
     freed = apply(deletions, dry_run=dry_run)
     if not dry_run:

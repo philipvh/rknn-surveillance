@@ -86,18 +86,39 @@ class TestPressure(unittest.TestCase):
         d, _ = plan(cands, free_gb=197, total_gb=1000)   # 3GB short
         self.assertEqual(len(d), 3)
 
-    def test_never_deletes_protected_under_pressure(self):
+    def test_protected_survives_a_full_disk_when_asked_to(self):
+        # The original policy, still available: a full disk stops the system
+        # rather than dropping any evidence.
         clips = [c(EVENTS, 30 + i, size=10 * GB, name=f"clip{i}",
                    protected=True, max_age_days=730) for i in range(5)]
-        d, w = plan(clips, free_gb=0, total_gb=1000)
+        d, w = plan(clips, free_gb=0, total_gb=1000, purge_protected=False)
         self.assertEqual(d, [], "event clips must survive a completely full disk")
         self.assertTrue(w, "a full disk with nothing deletable must warn")
         self.assertIn("protected", w[0])
 
-    def test_warns_but_keeps_evidence_when_target_unreachable(self):
+    def test_by_default_a_full_disk_costs_the_oldest_evidence(self):
+        # The policy now: the camera keeps recording, and the cost is the
+        # oldest clips rather than every future one.
+        clips = [c(EVENTS, 30 + i, size=10 * GB, name=f"clip{i}",
+                   protected=True, max_age_days=730) for i in range(5)]
+        d, w = plan(clips, free_gb=0, total_gb=1000)
+        self.assertTrue(d, "something must give, or nothing records again")
+        self.assertEqual({x.reason for x in d}, {"pressure (protected)"})
+        self.assertIn("clip4", str(d[0].path), "the oldest one first")
+        self.assertTrue(any("oldest protected" in x for x in w))
+
+    def test_unprotected_is_always_spent_before_evidence(self):
         cands = [c(MAIN, 1, size=GB, name="m"),
                  c(EVENTS, 400, size=500 * GB, protected=True, max_age_days=730)]
         d, w = plan(cands, free_gb=0, total_gb=1000)
+        self.assertEqual([x.tier_name for x in d], ["main", "events"],
+                         "the working buffer goes first, every time")
+        self.assertTrue(w)
+
+    def test_and_kept_entirely_when_purging_is_off(self):
+        cands = [c(MAIN, 1, size=GB, name="m"),
+                 c(EVENTS, 400, size=500 * GB, protected=True, max_age_days=730)]
+        d, w = plan(cands, free_gb=0, total_gb=1000, purge_protected=False)
         self.assertEqual([x.tier_name for x in d], ["main"])
         self.assertTrue(w)
 
@@ -148,6 +169,79 @@ class TestRealisticNight(unittest.TestCase):
         freed = sum(x.size for x in d)
         self.assertGreaterEqual(freed + 5 * GB, 200 * GB, "should reach the target")
         self.assertEqual(w, [], "target was reachable, so no warning expected")
+
+
+
+
+class TestFullDiskTakesTheOldestProtected(unittest.TestCase):
+    """A full disk must not stop the camera recording.
+
+    Without this pass the recorder simply stops: no clips, no stills, and the
+    only sign is a warning in a log nobody reads. Losing the oldest footage is
+    bounded and visible; recording nothing from today onwards is neither.
+    """
+
+    def test_protected_is_taken_only_after_everything_else(self):
+        cands = [c(EVENTS, 30, protected=True), c(EVENTS, 20, protected=True),
+                 c(DETECTIONS, 5), c(MAIN, 1)]
+        # 100 GB free of 1000, want 200 -> 100 GB short; two unprotected GB
+        # cannot cover it, so protected has to give.
+        dels, warns = plan(cands, free_gb=100, total_gb=1000)
+        order = [d.reason for d in dels]
+        self.assertEqual(order.count("pressure"), 2, "unprotected goes first")
+        self.assertIn("pressure (protected)", order)
+        self.assertLess(order.index("pressure"),
+                        order.index("pressure (protected)"))
+
+    def test_the_oldest_protected_goes_first(self):
+        cands = [c(EVENTS, 5, protected=True, name="new"),
+                 c(EVENTS, 60, protected=True, name="old"),
+                 c(EVENTS, 30, protected=True, name="mid")]
+        dels, _ = plan(cands, free_gb=199, total_gb=1000)   # 1 GB short
+        self.assertEqual(len(dels), 1)
+        self.assertIn("old", str(dels[0].path))
+
+    def test_it_stops_as_soon_as_the_target_is_met(self):
+        cands = [c(EVENTS, d, protected=True, name=f"e{d}")
+                 for d in (10, 20, 30, 40, 50)]
+        dels, _ = plan(cands, free_gb=198, total_gb=1000)   # 2 GB short
+        self.assertEqual(len(dels), 2, "no more than the shortfall requires")
+
+    def test_nothing_protected_is_touched_when_there_is_room(self):
+        cands = [c(EVENTS, 30, protected=True), c(DETECTIONS, 5)]
+        dels, warns = plan(cands, free_gb=500, total_gb=1000)
+        self.assertEqual(dels, [])
+        self.assertEqual(warns, [])
+
+    def test_it_says_so_loudly(self):
+        cands = [c(EVENTS, 30, protected=True)]
+        _, warns = plan(cands, free_gb=199, total_gb=1000)
+        self.assertTrue(warns)
+        self.assertIn("oldest protected", warns[0])
+
+    def test_the_old_behaviour_is_still_reachable(self):
+        cands = [c(EVENTS, 30, protected=True)]
+        dels, warns = plan(cands, free_gb=100, total_gb=1000,
+                           purge_protected=False)
+        self.assertEqual(dels, [], "nothing protected may be deleted")
+        self.assertTrue(any("left alone" in w for w in warns))
+
+    def test_a_file_still_being_written_is_never_taken(self):
+        cands = [c(EVENTS, 0, protected=True)]      # mtime = now
+        dels, _ = plan(cands, free_gb=100, total_gb=1000, min_age_s=120)
+        self.assertEqual(dels, [], "ffmpeg still owns it")
+
+    def test_a_pinned_file_is_never_taken(self):
+        keep = c(EVENTS, 90, protected=True)
+        dels, _ = plan([keep], free_gb=100, total_gb=1000,
+                       pinned={keep.path})
+        self.assertEqual(dels, [], "a queued cut still needs it")
+
+    def test_age_still_applies_to_protected_tiers_first(self):
+        cands = [c(EVENTS, 40, protected=True, max_age_days=30)]
+        dels, _ = plan(cands, free_gb=500, total_gb=1000)
+        self.assertEqual([d.reason for d in dels], ["age"],
+                         "over its age it goes regardless of disk pressure")
 
 
 if __name__ == "__main__":

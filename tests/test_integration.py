@@ -143,7 +143,7 @@ class TestEvidenceSurvives(Base):
         self.assertNotIn(clip, gone)
         self.assertTrue(clip.exists(), "a 200-day-old clip is well inside 730 days")
 
-    def test_pressure_never_takes_a_clip(self):
+    def test_recordings_are_spent_before_any_clip(self):
         now = dt.datetime.now()
         clips = [self.seg("events", now - dt.timedelta(days=i * 5),
                           size=4096, name=f"clip_{i}.mp4") for i in range(6)]
@@ -158,13 +158,23 @@ class TestEvidenceSurvives(Base):
         finally:
             retention.disk_state = real
 
-        tiers = {d.tier_name for d in deletions}
-        self.assertNotIn("events", tiers)
-        for c in clips:
-            self.assertTrue(c.exists(), f"{c.name} was deleted to make room")
-        self.assertTrue(any(not m.exists() for m in mains),
-                        "recordings should have been sacrificed instead")
-        self.assertTrue(warnings, "an unreachable target must be reported")
+        # Every working recording goes before the first clip does. On a disk
+        # this full the clips are then taken too, oldest first -- a camera
+        # that has stopped recording is a worse outcome than one that has
+        # lost its oldest footage -- but never before the cheap data is gone.
+        self.assertTrue(all(not m.exists() for m in mains),
+                        "recordings should have been sacrificed first")
+        self.assertTrue(warnings, "dropping evidence must be reported")
+        self.assertTrue(any("oldest protected" in w for w in warnings),
+                        "and it must say that is what happened")
+
+        # clips[0] is the newest, clips[5] the oldest. Whatever survives must
+        # be newer than whatever went: age order, not arbitrary.
+        gone = [i for i, c in enumerate(clips) if not c.exists()]
+        kept = [i for i, c in enumerate(clips) if c.exists()]
+        if gone and kept:
+            self.assertGreater(min(gone), max(kept),
+                               "the oldest clips go first")
 
     def test_in_flight_segment_is_left_alone(self):
         now = dt.datetime.now()
