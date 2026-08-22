@@ -605,6 +605,10 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             what = request.form.get("do") or "connect"
             if what == "check":
                 pass                      # handled below; nothing to change
+            elif what == "wifi-appass":
+                ok_, m = wifi_mod.set_ap_password(
+                    request.form.get("appass") or "")
+                (msg, err) = (m, "") if ok_ else ("", m)
             elif what in ("wifi-ap", "wifi-client"):
                 ok_, m = wifi_mod.set_mode(what.split("-", 1)[1])
                 (msg, err) = (m, "") if ok_ else ("", m)

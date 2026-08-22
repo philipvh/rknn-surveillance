@@ -278,5 +278,83 @@ class TestModeSwitching(unittest.TestCase):
         self.assertIn("must be", msg)
 
 
+
+
+class TestAccessPointPassword(unittest.TestCase):
+    """Setting the password the tablet uses to join the board."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        import vpn
+        self.vpn = vpn
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+        self.real_dir, vpn.REQ_DIR = vpn.REQ_DIR, self.dir
+        self.addCleanup(setattr, vpn, "REQ_DIR", self.real_dir)
+        self.asked = []
+        self.real_ask = vpn.ask
+        vpn.ask = lambda line, timeout=45.0, verb="do": (
+            self.asked.append(line) or (True, "ok"))
+        self.addCleanup(setattr, vpn, "ask", self.real_ask)
+
+    def handed_over(self):
+        p = Path(self.dir) / "ap-password"
+        return p.read_text().strip() if p.exists() else None
+
+    def test_it_is_handed_over_in_a_file_not_the_request_line(self):
+        import wifi
+        wifi.set_ap_password("clubhouse2026")
+        self.assertEqual(self.asked, ["wifi setpass"])
+        for line in self.asked:
+            self.assertNotIn("clubhouse2026", line,
+                             "the request line is world-readable")
+        self.assertEqual(self.handed_over(), "clubhouse2026")
+
+    def test_the_file_is_not_readable_by_others(self):
+        import os
+        import stat
+        import wifi
+        wifi.set_ap_password("clubhouse2026")
+        mode = os.stat(Path(self.dir) / "ap-password").st_mode
+        self.assertEqual(stat.S_IMODE(mode) & 0o077, 0,
+                         "a password other users can read is not a password")
+
+    def test_too_short_never_leaves_the_process(self):
+        import wifi
+        ok, msg = wifi.set_ap_password("short")
+        self.assertFalse(ok)
+        self.assertIn("8 characters", msg)
+        self.assertEqual(self.asked, [])
+        self.assertIsNone(self.handed_over())
+
+    def test_too_long_is_refused(self):
+        import wifi
+        ok, _ = wifi.set_ap_password("x" * 64)
+        self.assertFalse(ok)
+        self.assertEqual(self.asked, [])
+
+    def test_a_line_break_is_refused(self):
+        # The file is read a line at a time on the other side, so a newline
+        # would silently truncate the password rather than fail.
+        import wifi
+        ok, _ = wifi.set_ap_password("good\npassword")
+        self.assertFalse(ok)
+        self.assertEqual(self.asked, [])
+
+    def test_a_refusal_from_root_removes_the_handover_file(self):
+        import wifi
+        self.vpn.ask = lambda line, timeout=45.0, verb="do": (False, "nope")
+        ok, _ = wifi.set_ap_password("clubhouse2026")
+        self.assertFalse(ok)
+        self.assertIsNone(self.handed_over(),
+                          "a password must not be left lying in /run")
+
+    def test_it_warns_that_joined_devices_need_the_new_one(self):
+        import wifi
+        _, msg = wifi.set_ap_password("clubhouse2026")
+        self.assertIn("will need it again", msg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

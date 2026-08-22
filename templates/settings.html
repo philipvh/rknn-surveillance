@@ -227,6 +227,25 @@ uplink at all, which is the normal state at a site with no internet.</p>
 <code>./install.sh</code> on the board.</div>
 {% endif %}
 
+{% if wifi.present and vpn_control %}
+<h3>Access point password</h3>
+<p id="hint">What the tablet types to join <b>tvw-camera</b>. It is stored on
+the board at <code>/etc/rknn-ap-password</code>, readable only by root, and it
+is deliberately not shown here &mdash; this page is reachable by anyone on the
+network. Set one you can remember and type it into the tablet once.</p>
+<form method="post" action="{{ url_for('settings_wifi') }}" autocomplete="off">
+  <input type="hidden" name="do" value="wifi-appass">
+  <div class="field">
+    <label for="appass">New password</label>
+    <input type="password" id="appass" name="appass"
+           autocomplete="new-password">
+    <span class="sub">8 to 63 characters. Anything already joined will have to
+      be told the new one.</span>
+  </div>
+  <div id="actions"><button type="submit">Set password</button></div>
+</form>
+{% endif %}
+
 <h3>Remote access</h3>
 {% if vpn %}
 <p id="hint">A phone hotspot puts the board behind carrier NAT: it can reach

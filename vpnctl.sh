@@ -70,8 +70,8 @@ NAME="$2"
 # decides that "wifi" plus one of three words is a thing the panel may ask for.
 if [ "$ACTION" = "wifi" ]; then
   case "$NAME" in
-    client|ap|status) ;;
-    *) echo "wifi mode must be client, ap or status" >&2; exit 3 ;;
+    client|ap|status|setpass) ;;
+    *) echo "wifi action must be client, ap, status or setpass" >&2; exit 3 ;;
   esac
   for d in /home/radxa/rknn-surveillance /opt/rknn-surveillance; do
     [ -x "$d/wifi_mode.sh" ] && exec bash "$d/wifi_mode.sh" "$NAME"

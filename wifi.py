@@ -261,3 +261,42 @@ def set_mode(mode):
                          "should come back within a few seconds.",
                "status": msg}.get(mode, msg)
     return ok, msg
+
+
+def set_ap_password(password):
+    """Set the access point's password. Returns (ok, message).
+
+    Handed to root in a file rather than in the request line: the request
+    channel lives in a directory other users can list, and a password written
+    there would be readable for as long as it sat there. The file is created
+    0600 and root shreds it after reading.
+    """
+    import os
+    import vpn
+    pw = (password or "")
+    if len(pw) < 8:
+        return False, "The password must be at least 8 characters."
+    if len(pw) > 63:
+        return False, "The password must be at most 63 characters."
+    if "\n" in pw or "\r" in pw:
+        return False, "The password cannot contain a line break."
+
+    path = os.path.join(vpn.REQ_DIR, "ap-password")
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(pw + "\n")
+    except OSError as e:
+        return False, "Could not hand the password over: %s" % e
+
+    ok, msg = vpn.ask("wifi setpass", timeout=60.0,
+                      verb="set the access point password")
+    if not ok:
+        try:
+            os.unlink(path)          # root did not get to shred it
+        except OSError:
+            pass
+        return False, msg
+    log.warning("access point password changed")
+    return True, ("Access point password changed. Any device already joined "
+                  "will need it again.")

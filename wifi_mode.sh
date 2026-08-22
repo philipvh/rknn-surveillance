@@ -144,5 +144,40 @@ EOF
   echo "        sudo $0 client"
   ;;
 
-*) die "usage: $0 {status|client [name]|ap}" ;;
+# --------------------------------------------------------------- setpass
+setpass)
+  # The new password arrives in a file, not an argument: an argument would be
+  # in /proc/<pid>/cmdline for anything on the box to read while this runs.
+  # nmcli's own modify still takes it as an argument, which is a brief window
+  # this cannot close without writing NetworkManager keyfiles by hand.
+  SRC="${2:-/run/rknn-vpn/ap-password}"
+  [ -s "$SRC" ] || die "no password supplied"
+  NEW=$(head -1 "$SRC")
+  shred -u "$SRC" 2>/dev/null || rm -f "$SRC"
+  [ ${#NEW} -ge 8 ] || die "the password must be at least 8 characters"
+  [ ${#NEW} -le 63 ] || die "the password must be at most 63 characters"
+
+  umask 077
+  printf '%s\n' "$NEW" > "$AP_SECRET"
+  chmod 600 "$AP_SECRET"
+  say "Stored the access point password"
+
+  if nmcli -t -f NAME connection show 2>/dev/null | grep -qx "$AP_CON"; then
+    nmcli connection modify "$AP_CON" \
+        802-11-wireless-security.psk "$NEW" \
+      || die "could not update the access point"
+    say "Updated '${AP_SSID}'"
+    if nmcli -t -f NAME connection show --active 2>/dev/null | grep -qx "$AP_CON"; then
+      say "Restarting it so the new password takes effect"
+      nmcli connection down "$AP_CON" >/dev/null 2>&1 || true
+      nmcli connection up "$AP_CON" >/dev/null 2>&1 \
+        || die "the access point did not come back up"
+    fi
+  else
+    say "No access point configured yet; it will use this when you create one"
+  fi
+  echo; show
+  ;;
+
+*) die "usage: $0 {status|client [name]|ap|setpass [file]}" ;;
 esac
