@@ -56,12 +56,22 @@ recording:
     - name: detections
       stream: null            # a JPEG a second, while triggered
       path: detections
-      max_age_days: 365
+      # Sized against a measured 0.9 GB a day, not a guess. The stills are the
+      # quick index into an event; the clip beside them is the evidence and
+      # outlives them, so they do not need to be kept as long.
+      max_age_days: 10
       protected: false
     - name: events
       stream: null            # one concatenated clip per incident
       path: events
-      max_age_days: 730
+      # 730 days was aspirational: at the 5 GB a day this actually produces it
+      # would need 3.6 TB. On a 250 GB disk, 30 days of events plus 10 days of
+      # stills comes to about 160 GB and leaves room to spare.
+      #
+      # Raise this once recording follows the arming schedule -- a club that
+      # only records while it is closed generates a fraction of this, and the
+      # window can go back to months.
+      max_age_days: 30
       protected: true         # never deleted to make room
 
   annotated_max_frames: 1200
