@@ -94,8 +94,13 @@ class WiFi:
                 return {"device": dev, "state": state}
         return None
 
-    def status(self):
-        """What the radio is doing right now, and on what address."""
+    def status(self, nets=None):
+        """What the radio is doing right now, and on what address.
+
+        Pass the scan result in if you already have one. Working it out again
+        here meant the settings page ran two scans per request and took half a
+        minute to load -- long enough that a browser gives up on it.
+        """
         d = self.device()
         if d is None:
             return {"present": False, "connected": False, "ssid": "",
@@ -113,7 +118,7 @@ class WiFi:
             elif k == "GENERAL.STATE":
                 state = v
         signal = 0
-        for n in self.scan(rescan=False):
+        for n in (self.scan(rescan=False) if nets is None else nets):
             if n["in_use"]:
                 signal = n["signal"]
                 break
@@ -126,10 +131,11 @@ class WiFi:
         """Visible networks, strongest first, one entry per SSID."""
         if self.device() is None:
             return []
+        # --rescan no, explicitly. Leaving it out means "auto", which
+        # rescans whenever nmcli thinks the cache is stale -- so asking not to
+        # rescan still cost fifteen seconds, and the settings page with it.
         args = ["-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi",
-                "list"]
-        if rescan:
-            args += ["--rescan", "yes"]
+                "list", "--rescan", "yes" if rescan else "no"]
         rc, out, _ = self._run(args, timeout=25)
         if rc != 0:
             return []
@@ -233,3 +239,25 @@ class WiFi:
         if rc == 0:
             return True, "Disconnected."
         return False, (err or out or "Could not disconnect.").strip()
+
+
+def set_mode(mode):
+    """Switch the radio between joining a network and being one.
+
+    Goes through the same privileged channel as the tunnel: the panel writes a
+    request, root validates it again and acts. One radio, so one job at a time
+    -- in ap mode there is no uplink and the tunnel goes with it, which is the
+    normal state at a site with no internet.
+    """
+    if mode not in ("client", "ap", "status"):
+        return False, "Unknown wireless mode."
+    import vpn
+    ok, msg = vpn.ask("wifi %s" % mode, timeout=60.0, verb="switch the radio")
+    if ok:
+        log.warning("wireless mode -> %s", mode)
+        msg = {"ap": "Now an access point. There is no uplink in this mode, "
+                     "so the tunnel is down until it goes back to client.",
+               "client": "Rejoining a network. The uplink and the tunnel "
+                         "should come back within a few seconds.",
+               "status": msg}.get(mode, msg)
+    return ok, msg

@@ -67,9 +67,21 @@ else
   die "$MOUNT is not mounted; there is nothing to migrate"
 fi
 
-if lsblk -no NAME,MOUNTPOINT "$DEV" 2>/dev/null | grep -q '/'; then
-  die "$DEV has something mounted; unmount it first"
-fi
+# Anything mounted from the new disk has to go before it can be formatted.
+# Our own staging mountpoint left over from an interrupted run is ours to
+# clear -- refusing there just makes the retry a two-step dance for no reason.
+# Anything else is somebody's data and stays where it is.
+while read -r mp; do
+  [ -n "$mp" ] || continue
+  if [ "$mp" = "$STAGE" ]; then
+    say "Clearing our own staging mount at ${mp} from an earlier run"
+    umount "$mp" || die "could not unmount ${mp}"
+  else
+    die "$DEV is mounted at ${mp}; unmount it first if you mean to erase it"
+  fi
+done <<EOF
+$(lsblk -nlo MOUNTPOINT "$DEV" 2>/dev/null | grep -v '^$')
+EOF
 
 echo
 say "Plan"
@@ -87,8 +99,21 @@ if [ "$APPLY" != 1 ]; then
 fi
 
 # ------------------------------------------------------------------- do it
+# From here the service is down. Whatever happens, bring it back: a failed
+# migration must not also mean a camera that quietly stopped recording.
+STOPPED=0
+restore_service() {
+  if [ "$STOPPED" = 1 ] && ! systemctl is-active --quiet "$SERVICE"; then
+    echo "==> Restarting ${SERVICE} (it was stopped for the migration)"
+    systemctl start "$SERVICE" || \
+      echo "!!  could not restart ${SERVICE} -- start it by hand"
+  fi
+}
+trap restore_service EXIT
+
 say "Stopping ${SERVICE}"
 systemctl stop "$SERVICE" 2>/dev/null || true
+STOPPED=1
 sleep 2
 if fuser -m "$MOUNT" >/dev/null 2>&1; then
   say "Something still has files open on ${MOUNT}:"
@@ -99,10 +124,16 @@ fi
 say "Formatting ${DEV}"
 # NO_FSTAB: this is a staging mount. mount_data.sh writes the real entry once
 # the copy has been verified, and only for ${MOUNT}.
-MOUNT="$STAGE" NO_FSTAB=1 bash "${HERE}/format_data.sh" "$DEV" \
+MOUNT="$STAGE" NO_FSTAB=1 bash "${HERE}/format_data.sh" "$DEV" --erase \
   || die "format_data.sh failed; nothing has been moved"
 
-PART="${DEV}p1"; [ -b "$PART" ] || PART="${DEV}1"
+# Ask what partition actually appeared rather than constructing a name.
+# "${DEV}1" on /dev/nvme0n1 yields /dev/nvme0n11 -- not a typo the eye
+# catches, and not a device that exists.
+PART=$(lsblk -nlo NAME "$DEV" | sed -n '2p')
+PART="${PART:+/dev/$PART}"
+[ -b "${PART:-}" ] || die "no partition appeared on ${DEV} after formatting"
+say "New partition: ${PART}"
 mkdir -p "$STAGE"
 mountpoint -q "$STAGE" || mount "$PART" "$STAGE" || die "could not mount $PART"
 
@@ -113,12 +144,28 @@ rsync -aH --info=progress2 --no-inc-recursive "${MOUNT}/" "${STAGE}/" \
 say "Verifying"
 a_files=$(find "$MOUNT" -type f | wc -l)
 b_files=$(find "$STAGE" -type f | wc -l)
-a_bytes=$(du -sb "$MOUNT" | cut -f1)
-b_bytes=$(du -sb "$STAGE" | cut -f1)
+# Sum the files themselves, not `du`. du counts directory blocks, and a
+# freshly made filesystem allocates those differently -- a few kB of
+# difference that says nothing about whether the recordings copied.
+# "%.0f", and neither of the two obvious alternatives. On the board's mawk a
+# sum this large prints as 1.16827e+10 with a bare print, and %d saturates at
+# 2147483647 -- both make every total compare equal, so the check would pass
+# while recordings were missing. A verification that cannot fail is worse than
+# none, because it is believed. %.0f goes through a double and is exact well
+# past any disk this will ever see.
+sum_bytes() {
+  find "$1" -type f -printf '%s\n' 2>/dev/null \
+    | awk '{s+=$1} END{printf "%.0f\n", s}'
+}
+a_bytes=$(sum_bytes "$MOUNT")
+b_bytes=$(sum_bytes "$STAGE")
 echo "    old: ${a_files} files, ${a_bytes} bytes"
 echo "    new: ${b_files} files, ${b_bytes} bytes"
 [ "$a_files" = "$b_files" ] || die "file counts differ; nothing has been switched"
-[ "$a_bytes" = "$b_bytes" ] || die "sizes differ; nothing has been switched"
+if [ "$a_bytes" != "$b_bytes" ]; then
+  echo "    difference: $(( b_bytes - a_bytes )) bytes"
+  die "file sizes differ; nothing has been switched"
+fi
 
 # The clips are the evidence. Check a sample properly rather than trusting du.
 say "Checksumming a sample of the clips"

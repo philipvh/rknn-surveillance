@@ -224,5 +224,59 @@ class TestStatus(unittest.TestCase):
         self.assertFalse(radio.status()["connected"])
 
 
+
+
+class TestModeSwitching(unittest.TestCase):
+    """Switching the radio between client and access point.
+
+    The radio is the board's only uplink at a site with no wiring, so turning
+    it into an access point removes remote access entirely. Getting the guard
+    wrong here means a drive to the club.
+    """
+
+    def setUp(self):
+        import vpn
+        self.vpn = vpn
+        self.asked = []
+        self.real = vpn.ask
+        vpn.ask = lambda line, timeout=45.0, verb="do": (
+            self.asked.append(line) or (True, "ok"))
+        self.addCleanup(setattr, vpn, "ask", self.real)
+
+    def test_client_and_ap_are_passed_through(self):
+        import wifi
+        for mode in ("client", "ap"):
+            ok, _ = wifi.set_mode(mode)
+            self.assertTrue(ok, mode)
+        self.assertEqual(self.asked, ["wifi client", "wifi ap"])
+
+    def test_anything_else_never_becomes_a_request(self):
+        import wifi
+        for bad in ("reboot", "../../x", "", "ap; reboot", "AP"):
+            ok, _ = wifi.set_mode(bad)
+            self.assertFalse(ok, repr(bad))
+        self.assertEqual(self.asked, [],
+                         "an unknown mode must not reach root at all")
+
+    def test_ap_says_the_uplink_goes_with_it(self):
+        import wifi
+        _, msg = wifi.set_mode("ap")
+        self.assertIn("no uplink", msg)
+        self.assertIn("tunnel", msg)
+
+    def test_client_says_the_tunnel_comes_back(self):
+        import wifi
+        _, msg = wifi.set_mode("client")
+        self.assertIn("tunnel", msg)
+
+    def test_a_refusal_from_root_is_reported(self):
+        import wifi
+        self.vpn.ask = lambda line, timeout=45.0, verb="do": (
+            False, "wifi mode must be client, ap or status")
+        ok, msg = wifi.set_mode("ap")
+        self.assertFalse(ok)
+        self.assertIn("must be", msg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

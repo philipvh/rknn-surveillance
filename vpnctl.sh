@@ -13,9 +13,17 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 #
-# Start, stop, enable or disable ONE openvpn client unit. Installed to
+# The panel's privileged actions, in one validated place. Installed to
 # /usr/local/sbin and granted NOPASSWD sudo, so the panel can work the tunnel
-# without being root.
+# and the radio without being root.
+#
+#   rknn-vpnctl {start|stop|restart|enable|disable|status} <tunnel>
+#   rknn-vpnctl wifi {client|ap|status}
+#
+# The name says vpn because that is what it did first; it now carries the Wi-Fi
+# mode switch too, because both need exactly the same thing -- a root action
+# asked for by a process that is forbidden to become root -- and one audited
+# channel is easier to reason about than two.
 #
 # The reason this exists rather than a sudoers line for systemctl: a rule like
 #   radxa ALL=(root) NOPASSWD: /bin/systemctl * openvpn-client@*
@@ -57,6 +65,19 @@ usage() {
 [ $# -eq 2 ] || usage
 ACTION="$1"
 NAME="$2"
+
+# The radio. Its own script does the work and its own validation; this only
+# decides that "wifi" plus one of three words is a thing the panel may ask for.
+if [ "$ACTION" = "wifi" ]; then
+  case "$NAME" in
+    client|ap|status) ;;
+    *) echo "wifi mode must be client, ap or status" >&2; exit 3 ;;
+  esac
+  for d in /home/radxa/rknn-surveillance /opt/rknn-surveillance; do
+    [ -x "$d/wifi_mode.sh" ] && exec bash "$d/wifi_mode.sh" "$NAME"
+  done
+  echo "wifi_mode.sh not found" >&2; exit 4
+fi
 
 case "$ACTION" in
   start|stop|restart|enable|disable|status) ;;

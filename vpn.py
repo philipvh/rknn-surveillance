@@ -216,6 +216,19 @@ def control(action, name, timeout=45.0):
         return False, ("The tunnel helper is not installed. Run ./install.sh "
                        "on the board.")
 
+    return ask("%s %s" % (action, name), timeout=timeout, verb=action)
+
+
+def ask(line, timeout=45.0, verb="do"):
+    """Ask root to do something, and wait for the answer.
+
+    The panel cannot use sudo: its unit sets NoNewPrivileges and sudo is
+    setuid. What it can do is write a file that a root .path unit is watching.
+    Everything it asks for is validated again on the other side.
+    """
+    if not os.path.isdir(REQ_DIR) or not os.access(REQ_DIR, os.W_OK):
+        return False, ("The privileged helper is not installed. Run "
+                       "./install.sh on the board.")
     req = os.path.join(REQ_DIR, "request")
     res = os.path.join(REQ_DIR, "result")
     try:
@@ -224,7 +237,7 @@ def control(action, name, timeout=45.0):
         if os.path.exists(res):
             os.unlink(res)
         with open(req, "w", encoding="utf-8") as fh:
-            fh.write("%s %s\n" % (action, name))
+            fh.write(line.strip() + "\n")
     except OSError as e:
         return False, "Could not ask for the change: %s" % e
 
@@ -252,7 +265,7 @@ def control(action, name, timeout=45.0):
         said = {"enable": "will start at boot, and is starting now",
                 "disable": "will not start at boot, and is stopping now",
                 "start": "starting", "stop": "stopped",
-                "restart": "restarting"}[action]
-        log.warning("tunnel %r: %s", name, action)
-        return True, "Tunnel %s %s." % (name, said)
-    return False, msg or "Could not %s the tunnel." % action
+                "restart": "restarting"}.get(verb)
+        log.warning("privileged request %r succeeded", line)
+        return True, ("Tunnel %s." % said) if said else (msg or "Done.")
+    return False, msg or ("Could not %s." % verb)

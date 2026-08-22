@@ -43,6 +43,7 @@ import yaml
 
 import config as config_mod
 import vpn
+import wifi as wifi_mod
 from wifi import WiFi
 
 from flask import (Flask, Response, abort, jsonify, redirect,
@@ -604,6 +605,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             what = request.form.get("do") or "connect"
             if what == "check":
                 pass                      # handled below; nothing to change
+            elif what in ("wifi-ap", "wifi-client"):
+                ok_, m = wifi_mod.set_mode(what.split("-", 1)[1])
+                (msg, err) = (m, "") if ok_ else ("", m)
             elif what in ("vpn-enable", "vpn-disable", "vpn-restart"):
                 ok_, m = vpn.control(what.split("-", 1)[1],
                                      request.form.get("tunnel") or "")
@@ -632,12 +636,15 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             err = "" if (ok_r and ok_d) else checked
             msg = checked if (ok_r and ok_d) else ""
 
+        # Scan once, and only when asked. A rescan takes up to 25 seconds on
+        # this radio, and doing one on every page load -- twice, because
+        # status() used to run its own -- made the page take half a minute.
+        nets = radio.scan(rescan=bool(request.args.get("rescan")))
         return _settings_page("wifi", wifi_err=err, wifi_msg=msg,
                               vpn=vpn.status(), checked=checked,
                               vpn_control=vpn.can_control(),
-                              wifi=radio.status(),
-                              wifi_networks=radio.scan(
-                                  rescan=request.method == "GET"),
+                              wifi=radio.status(nets),
+                              wifi_networks=nets,
                               wifi_available=radio.available)
 
     @app.route("/settings/system", methods=["GET", "POST"])

@@ -136,7 +136,11 @@ configured from here.</div>
 nothing here can take the board off ethernet.</p>
 {% endif %}
 
-<h3>Networks in range</h3>
+<h3>Networks in range
+  <a href="{{ url_for('settings_wifi') }}?rescan=1" style="font-size:13px;
+     font-weight:normal; color:#62bb99; margin-left:10px;">rescan</a></h3>
+<p class="sub">Showing what the radio last saw. A fresh scan takes about
+twenty seconds, so it is not done on every visit.</p>
 {% if not wifi_networks %}
 <p id="hint">Nothing found. The dongle may still be starting up; reload in a
 few seconds.</p>
@@ -194,6 +198,33 @@ few seconds.</p>
   settings file.
 </div>
 
+{% endif %}
+
+<h3>What the radio is doing</h3>
+<p id="hint">One radio, so one job at a time. As a <b>client</b> it joins a
+network and that is the board's way out &mdash; the tunnel rides on it. As an
+<b>access point</b> it becomes a network for the wall tablet, and there is no
+uplink at all, which is the normal state at a site with no internet.</p>
+
+{% if wifi.present and vpn_control %}
+<div class="grid">
+  <form method="post" action="{{ url_for('settings_wifi') }}" class="net">
+    <input type="hidden" name="do" value="wifi-client">
+    <div class="netname">Client</div>
+    <div class="netmeta">join a network &mdash; uplink and tunnel work</div>
+    <button type="submit">Use as client</button>
+  </form>
+  <form method="post" action="{{ url_for('settings_wifi') }}" class="net"
+        onsubmit="return confirm('Switch to access point mode?\n\nThe board will have no internet and the tunnel will go down. If you are reading this over the tunnel you will lose this page, and only someone at the board can switch it back.');">
+    <input type="hidden" name="do" value="wifi-ap">
+    <div class="netname">Access point</div>
+    <div class="netmeta">be a network for the tablet &mdash; no uplink</div>
+    <button type="submit" class="plainbtn">Become an access point</button>
+  </form>
+</div>
+{% elif wifi.present %}
+<div class="note">Switching modes needs the privileged helper. Run
+<code>./install.sh</code> on the board.</div>
 {% endif %}
 
 <h3>Remote access</h3>

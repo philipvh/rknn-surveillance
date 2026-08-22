@@ -238,7 +238,7 @@ if sudo test -d /etc/polkit-1/localauthority; then
     >/dev/null <<EOF
 [Let ${USER_NAME} manage NetworkManager]
 Identity=unix-user:${USER_NAME}
-Action=org.freedesktop.NetworkManager.settings.modify.system;org.freedesktop.NetworkManager.network-control;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.wifi.scan
+Action=org.freedesktop.NetworkManager.settings.modify.system;org.freedesktop.NetworkManager.network-control;org.freedesktop.NetworkManager.enable-disable-wifi;org.freedesktop.NetworkManager.wifi.scan;org.freedesktop.NetworkManager.wifi.share.open;org.freedesktop.NetworkManager.wifi.share.protected
 ResultAny=yes
 ResultInactive=yes
 ResultActive=yes
