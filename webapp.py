@@ -1144,6 +1144,23 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True, enabled=settings.sweep_enabled,
                        ready=settings.sweep_ready)
 
+    @app.route("/api/ptz/home/set", methods=["POST"])
+    @protected
+    def api_home_set():
+        """Save the current view as the home / rest position.
+
+        Home is where the camera parks and where it returns after a sweep, so
+        being able to re-aim it from the panel matters as much as the sweep
+        ends. Same mechanism: aim with the D-pad, then save.
+        """
+        need_ptz()
+        home = cfg._get("ptz", "home_preset", default="Home")
+        try:
+            ptz.add_preset(home)
+        except Exception as e:
+            return jsonify(ok=False, error=str(e)), 200
+        return jsonify(ok=True, name=home)
+
     @app.route("/api/ptz/sweep/once", methods=["POST"])
     @protected
     def api_sweep_once():

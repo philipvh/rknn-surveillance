@@ -157,6 +157,7 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       <div class="row">
         <button class="small" id="setleft" title="aim left, then save this view">Set Left</button>
         <button class="small" id="setright" title="aim right, then save this view">Set Right</button>
+        <button class="small" id="sethome" title="aim to the rest view, then save it as home">Set Home</button>
       </div>
       <div class="row">
         <button class="small" id="sweepnow" title="run one Left-Right-home cycle to check the aim">Sweep now</button>
@@ -359,6 +360,17 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
   }
   bindSweepSet('setleft', 'left');
   bindSweepSet('setright', 'right');
+
+  var setHome = document.getElementById('sethome');
+  if (setHome) {
+    setHome.addEventListener('click', function (e) {
+      e.preventDefault();
+      post('/api/ptz/home/set', '', function (r) {
+        if (r && r.ok) say('Saved the home position.');
+        else handle(r);
+      });
+    }, false);
+  }
 
   var sweepNow = document.getElementById('sweepnow');
   if (sweepNow) {

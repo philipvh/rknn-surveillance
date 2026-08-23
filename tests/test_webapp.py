@@ -1222,6 +1222,12 @@ class TestSweepNow(Base):
         self.assertTrue(r.get_json()["ok"])
         self.assertEqual(self.ctrl.called, 1)
 
+    def test_set_home_saves_the_home_preset(self):
+        r = self.c.post("/api/ptz/home/set", headers=self.auth())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(r.get_json()["name"], "Home")
+        self.assertIn("ptzAddPresetPoint", self.cam.calls)
+
     def test_sweep_now_reports_when_endpoints_missing(self):
         self.ctrl.ready = False
         r = self.c.post("/api/ptz/sweep/once", headers=self.auth())
