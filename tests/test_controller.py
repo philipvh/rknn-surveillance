@@ -35,6 +35,7 @@ class FakePTZ:
         self.moving = False
         self._settled = True
         self.gotos = []
+        self.scan_starts = []
         self.refuse = False
         self.at = None
 
@@ -45,6 +46,7 @@ class FakePTZ:
         if self.refuse:
             raise BudgetExceeded("motor budget spent")
         self.gotos.append(name)
+        self.scan_starts.append(is_scan_start)
         self.at = name
 
 
@@ -746,6 +748,37 @@ class TestTriggerSweep(unittest.TestCase):
         self.see()
         self.assertIsNot(self.c.state, State.SWEEPING)
         self.assertNotIn("SweepLeft", self.ptz.gotos)
+
+    def test_sweep_once_runs_a_single_cycle_and_homes(self):
+        ok = self.c.sweep_once()
+        self.assertTrue(ok)
+        self.assertIs(self.c.state, State.SWEEPING)
+        # let the one cycle play out and settle
+        self.advance(30.0)
+        seq = [g for g in self.ptz.gotos if g in ("SweepLeft", "SweepRight")]
+        self.assertEqual(seq, ["SweepLeft", "SweepRight"],
+                         "a one-shot must visit each end exactly once")
+        self.assertIn("Home", self.ptz.gotos)
+        self.assertIn(self.c.state, (State.PARKED, State.RETURNING))
+
+    def test_sweep_once_works_even_when_disabled(self):
+        # It is a manual check; the automatic toggle should not gate it.
+        self.settings.sweep_enabled = False
+        self.assertTrue(self.c.sweep_once())
+        self.assertIs(self.c.state, State.SWEEPING)
+
+    def test_manual_sweep_does_not_count_as_a_scan_start(self):
+        # else the min-scan-interval throttle would refuse a real trigger that
+        # arrives just after a manual test sweep.
+        self.c.sweep_once()
+        self.advance(30.0)
+        self.assertNotIn(True, self.c.ptz.scan_starts,
+                         "a manual one-shot must not register a scan start")
+
+    def test_sweep_once_refused_without_endpoints(self):
+        self.settings._left = False
+        self.assertFalse(self.c.sweep_once())
+        self.assertIsNot(self.c.state, State.SWEEPING)
 
     def test_budget_refusal_ends_the_sweep(self):
         self.ptz.refuse = True

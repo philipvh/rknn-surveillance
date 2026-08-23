@@ -158,6 +158,9 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
         <button class="small" id="setleft" title="aim left, then save this view">Set Left</button>
         <button class="small" id="setright" title="aim right, then save this view">Set Right</button>
       </div>
+      <div class="row">
+        <button class="small" id="sweepnow" title="run one Left-Right-home cycle to check the aim">Sweep now</button>
+      </div>
       <h3>Presets</h3>
       <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
       {% for p in presets %}{% if p != home %}
@@ -344,6 +347,17 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
   }
   bindSweepSet('setleft', 'left');
   bindSweepSet('setright', 'right');
+
+  var sweepNow = document.getElementById('sweepnow');
+  if (sweepNow) {
+    sweepNow.addEventListener('click', function (e) {
+      e.preventDefault();
+      post('/api/ptz/sweep/once', '', function (r) {
+        if (r && r.ok) say('Sweeping…');
+        else handle(r);
+      });
+    }, false);
+  }
 
   /* anything that means the page is going away must release the motors */
   function panic() { stopMove(true); }

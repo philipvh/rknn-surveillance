@@ -127,6 +127,7 @@ class Controller:
 
         self._preset_index = 0
         self._sweep_index = 0
+        self._sweep_once = False        # a one-shot manual sweep is running
         self._pir_active = False
         self._pir_last_release = None
         self._pir_last_duration = 0.0
@@ -382,31 +383,73 @@ class Controller:
         self._preset_index = 0
         self._go(State.SCANNING, "lights up")
 
+    def _endpoints_ready(self):
+        """Both endpoints saved and the dome can move -- regardless of the
+        enable toggle, because a manual one-shot sweep does not need it on."""
+        s = self.settings
+        if s is None or not getattr(self.ptz, "enabled", True):
+            return False
+        try:
+            return bool(s.sweep_ready)
+        except Exception:
+            return False
+
+    def sweep_once(self):
+        """Run a single Left-Right-home cycle now, on demand.
+
+        For aiming and checking the endpoints without waiting for a real
+        trigger and without turning the automatic behaviour on. Returns False
+        if there is nothing to sweep between.
+        """
+        if not self._endpoints_ready():
+            return False
+        self._sweep_once = True
+        self._sweep_index = 0
+        self._deadline = None
+        self._go(State.SWEEPING, "manual sweep")
+        return True
+
     def _tick_sweeping(self):
         # Oscillate between the two endpoints, dwelling at each so the detector
-        # sees a still frame. Ends when the scene has been quiet for the quiet
-        # period -- the same terminator as an incident -- or on the hold cap as
-        # a backstop, so a permanently busy scene cannot sweep the motors for
-        # ever.
-        if not self.sweep_ready():
+        # sees a still frame. A triggered sweep ends when the scene has been
+        # quiet for the quiet period (the same terminator as an incident); a
+        # manual one-shot ends after both ends have been visited once. The hold
+        # cap backstops both, so a busy scene cannot sweep the motors for ever.
+        one_shot = self._sweep_once
+        if not self._endpoints_ready():
+            self._sweep_once = False
+            self._go(State.RETURNING, "sweep endpoints gone")
+            return
+        if not one_shot and not self.sweep_ready():
             self._go(State.RETURNING, "sweep turned off")
             return
         if self._elapsed() > self.max_hold_s:
+            self._sweep_once = False
             self._go(State.RETURNING, "sweep reached its time cap")
             return
-        last = self._last_trigger_at
-        if last is not None and (self._clock() - last) >= self.quiet_period_s \
-                and not self._pir_active:
-            self._go(State.RETURNING, "scene quiet, ending sweep")
-            return
+        if not one_shot:
+            last = self._last_trigger_at
+            if last is not None and (self._clock() - last) >= self.quiet_period_s \
+                    and not self._pir_active:
+                self._go(State.RETURNING, "scene quiet, ending sweep")
+                return
         if self._deadline is None:
+            if one_shot and self._sweep_index >= 2:
+                self._sweep_once = False
+                self._go(State.RETURNING, "manual sweep complete")
+                return
             presets = [SWEEP_LEFT_PRESET, SWEEP_RIGHT_PRESET]
             name = presets[self._sweep_index % len(presets)]
             self._sweep_index += 1
             try:
-                self.ptz.goto_preset(name, source="auto",
-                                     is_scan_start=(self._sweep_index == 1))
+                # A manual one-shot does not register as a scan start: it is a
+                # deliberate check, and must not make the min-scan-interval
+                # throttle refuse a real trigger that arrives seconds later.
+                self.ptz.goto_preset(
+                    name, source="manual" if one_shot else "auto",
+                    is_scan_start=(self._sweep_index == 1 and not one_shot))
             except BudgetExceeded as e:
+                self._sweep_once = False
                 self._go(State.RETURNING, f"motor budget: {e}")
                 return
             self._deadline = (self._clock() + self._sweep_dwell()

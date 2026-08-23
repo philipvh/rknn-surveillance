@@ -1197,6 +1197,38 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class _StubController:
+    def __init__(self, ready=True):
+        self.ready = ready
+        self.called = 0
+    def sweep_once(self):
+        self.called += 1
+        return self.ready
+
+
+class TestSweepNow(Base):
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json")
+        self.ctrl = _StubController(ready=True)
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=self.ctrl,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def test_sweep_now_runs_a_cycle(self):
+        r = self.c.post("/api/ptz/sweep/once", headers=self.auth())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(self.ctrl.called, 1)
+
+    def test_sweep_now_reports_when_endpoints_missing(self):
+        self.ctrl.ready = False
+        r = self.c.post("/api/ptz/sweep/once", headers=self.auth())
+        self.assertFalse(r.get_json()["ok"])
+        self.assertIn("Left and Right", r.get_json()["error"])
+
+
 class TestTriggerSweepEndpoints(Base):
     """Saving sweep endpoints from the panel and toggling the behaviour."""
 

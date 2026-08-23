@@ -1144,6 +1144,23 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True, enabled=settings.sweep_enabled,
                        ready=settings.sweep_ready)
 
+    @app.route("/api/ptz/sweep/once", methods=["POST"])
+    @protected
+    def api_sweep_once():
+        """Run one sweep cycle now, to check the aim.
+
+        Unlike 'Scan now' (which just pretends the PIR fired and so only sweeps
+        if the automatic behaviour is on), this always runs a single
+        Left-Right-home cycle, provided both endpoints have been saved.
+        """
+        need_ptz()
+        if controller is None:
+            abort(503)
+        if not controller.sweep_once():
+            return jsonify(ok=False,
+                           error="Set the Left and Right points first."), 200
+        return jsonify(ok=True)
+
     @app.route("/settings/sweep", methods=["POST"])
     @protected
     def settings_sweep():
