@@ -245,16 +245,27 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
      left running when nobody is steering is just load on the camera. */
   var aimbox = document.getElementById('aimbox');
   var aimimg = document.getElementById('aim');
-  function showAim(on) {
+  /* The PiP shows for any of three reasons: a button is held (manual), the
+     camera is moving on its own (a sweep or a scan, seen in the status), or a
+     preset/one-shot was just asked for (a timed window so it appears at once,
+     before the next status poll confirms the motion). The src is set only on
+     the off->on edge and cleared on on->off, so a sustained reason does not
+     restart the stream every poll, and nothing polls the camera once the
+     camera is still and nobody is steering. */
+  var aimManual = false, aimAuto = false, aimUntil = 0;
+  function applyAim() {
     if (!aimbox) return;
-    if (on) {
+    var want = aimManual || aimAuto || (new Date()).getTime() < aimUntil;
+    var on = aimbox.className.indexOf('on') >= 0;
+    if (want && !on) {
       aimimg.src = '/aim.mjpg?t=' + (new Date()).getTime();
       aimbox.className = 'on';
-    } else {
+    } else if (!want && on) {
       aimbox.className = '';
       aimimg.src = '';            /* stops the MJPEG request */
     }
   }
+  function showAim(on) { aimManual = !!on; applyAim(); }
 
   function startMove(kind, dir) {
     stopMove(true);
@@ -304,9 +315,10 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
         e.preventDefault();
         post('/api/ptz/preset', 'name=' + encodeURIComponent(el.getAttribute('data-preset')), handle);
         /* a preset jump takes a few seconds; show the fresh feed until it
-           arrives, unless a manual move takes over in the meantime */
-        showAim(true);
-        setTimeout(function () { if (!moving) showAim(false); }, 4000);
+           arrives */
+        aimUntil = (new Date()).getTime() + 5000;
+        applyAim();
+        setTimeout(applyAim, 5100);
       }, false);
     })(els[i]);
   }
@@ -353,8 +365,15 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
     sweepNow.addEventListener('click', function (e) {
       e.preventDefault();
       post('/api/ptz/sweep/once', '', function (r) {
-        if (r && r.ok) say('Sweeping…');
-        else handle(r);
+        if (r && r.ok) {
+          say('Sweeping…');
+          /* show the fresh feed right away; the status poll will then keep it
+             up for the real duration and drop it when the camera settles */
+          aimUntil = (new Date()).getTime() + 8000;
+          applyAim();
+          setTimeout(applyAim, 8100);
+          refresh();
+        } else { handle(r); }
       });
     }, false);
   }
@@ -408,6 +427,11 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       a.innerHTML = s.armed ? 'Armed' : 'Disarmed';
       a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
       if (s.sweep) updateSweep(s.sweep);
+      /* Show the near-live PiP whenever the camera is moving on its own, so a
+         sweep is watchable without the transcode's lag. */
+      aimAuto = (s.state === 'sweeping' || s.state === 'scanning'
+                 || s.state === 'returning');
+      applyAim();
     };
     x.send();
   }
