@@ -1259,6 +1259,51 @@ class TestUsageMeter(Base):
         self.assertNotIn(b"Mobile data", r.data)
 
 
+class TestDataSaverSwitch(Base):
+    """Whether a remote viewer gets a reduced picture is the operator's call:
+    on a 30 GB bundle the quality is worth more than the saving."""
+
+    REMOTE = {"REMOTE_ADDR": "10.8.2.9"}
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json")
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def test_auto_is_the_default(self):
+        self.assertEqual(self.store.data_saver, "auto")
+
+    def test_off_gives_a_remote_viewer_the_full_picture(self):
+        self.c.post("/settings/datasaver", data={"data_saver": "off"},
+                    headers=self.auth())
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base=self.REMOTE).data
+        self.assertNotIn(b'id="metered"', body)
+        self.assertIn(b'var showDetector = true', body)
+
+    def test_on_reduces_even_on_the_local_network(self):
+        self.c.post("/settings/datasaver", data={"data_saver": "on"},
+                    headers=self.auth())
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base=self.LOCAL).data
+        self.assertIn(b'id="metered"', body)
+
+    def test_a_nonsense_mode_is_refused_not_stored(self):
+        self.c.post("/settings/datasaver", data={"data_saver": "sometimes"},
+                    headers=self.auth())
+        self.assertEqual(self.store.data_saver, "auto")
+
+    def test_the_knobs_are_editable_from_the_system_tab(self):
+        body = self.c.get("/settings/system", headers=self.auth()).data
+        self.assertIn(b"Data saver: frames/second", body)
+        self.assertIn(b"Data saver: aiming frames/second", body)
+
+
 class TestMeteredLink(Base):
     """A viewer over the 4G tunnel costs money; one on the board's own wiring
     does not. The streams are the only thing here big enough to matter."""
@@ -1292,6 +1337,35 @@ class TestMeteredLink(Base):
                           environ_base={"REMOTE_ADDR": ""}).data
         self.assertIn(b'id="metered"', body,
                       "an unknown client was assumed free")
+
+
+class TestDataOnTheMainScreen(Base):
+    def setUp(self):
+        super().setUp()
+        from datausage import DataUsage
+        net = Path(self.tmp.name) / "net" / "wan0" / "statistics"
+        net.mkdir(parents=True)
+        (net / "rx_bytes").write_text(str(2 * 1073741824))
+        (net / "tx_bytes").write_text("0")
+        self.usage = DataUsage(Path(self.tmp.name) / "usage.json",
+                               iface="wan0", limit_gb=30.0, billing_day=1,
+                               sys_net=str(Path(self.tmp.name) / "net"))
+        self.usage._last_raw = 0
+        self.usage._last_iface = "wan0"
+        self.usage.sample()
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, usage=self.usage)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def test_the_view_tab_has_somewhere_to_show_it(self):
+        body = self.c.get("/", headers=self.auth()).data
+        self.assertIn(b'id="datause"', body)
+
+    def test_the_number_arrives_with_the_status_poll(self):
+        s = self.c.get("/api/status", headers=self.auth()).get_json()
+        self.assertEqual(s["usage"]["used_gb"], 2.0)
+        self.assertEqual(s["usage"]["limit_gb"], 30.0)
 
 
 class TestPanelLayout(Base):

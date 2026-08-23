@@ -408,6 +408,25 @@ loaded once with these values before saving, so it will start.</div>
   </table>
 </div>
 {% endif %}
+<form method="post" action="{{ url_for('settings_datasaver') }}">
+  <label style="display:block;margin:8px 0">
+    Data saver
+    <select name="data_saver" style="width:22em">
+      <option value="auto" {% if data_saver == 'auto' %}selected{% endif %}>
+        automatic &mdash; reduced only for viewers off this network</option>
+      <option value="off" {% if data_saver == 'off' %}selected{% endif %}>
+        off &mdash; full quality everywhere</option>
+      <option value="on" {% if data_saver == 'on' %}selected{% endif %}>
+        always on &mdash; reduced even on this network</option>
+    </select>
+  </label>
+  <button type="submit">Save</button>
+</form>
+<p class="sub">On a large bundle the picture is worth more than the saving.
+  What "reduced" means is set in the fields below, so it can be loosened
+  rather than switched off entirely &mdash; the aiming view is the one that
+  costs the most.</p>
+
 <p class="sub">Live video is the only thing here big enough to matter: the
   overlay view costs about 0.8 GB an hour to a viewer on the board's own
   network. Anyone watching from outside already gets a reduced picture, which

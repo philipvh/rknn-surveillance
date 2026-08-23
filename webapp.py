@@ -195,7 +195,18 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return nets
 
     def metered():
-        """True when the viewer is reached over a link somebody pays per GB for."""
+        """True when the viewer should get the cheaper picture.
+
+        Normally that means "not on the board's own wiring", but it is an
+        operator switch: on a 30 GB bundle the picture quality is worth more
+        than the saving, and which side of that trade a club is on is not
+        something to infer from the code.
+        """
+        mode = settings.data_saver if settings is not None else "auto"
+        if mode == "off":
+            return False
+        if mode == "on":
+            return True
         addr = request.remote_addr or ""
         try:
             ip = ipaddress.ip_address(addr)
@@ -469,6 +480,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             wifi_available=True, vpn=None, checked="", vpn_control=False,
             disk=_disk_report(),
             usage=(usage.report() if usage is not None else None),
+            data_saver=(settings.data_saver if settings is not None else "auto"),
             sweep_enabled=(settings.sweep_enabled
                            if settings is not None else False),
             sweep_dwell=(settings.sweep_dwell_s
@@ -608,6 +620,20 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
          "for the data meter above; 0 to show usage without a percentage"),
         ("usage.billing_day", "Bundle resets on day", "number",
          "day of the month the allowance starts again (1-28)"),
+        # What the data saver actually does, so a big bundle can be spent on
+        # a better picture instead of being saved for nothing.
+        ("web.metered_fps", "Data saver: frames/second", "text",
+         "live view rate for a viewer on the metered link"),
+        ("web.metered_scale", "Data saver: width (px)", "number",
+         "how wide the picture is sent; 960 is full size"),
+        ("web.metered_quality", "Data saver: ffmpeg quality", "number",
+         "2 is near-lossless, 31 is coarse; 12 is the frugal default"),
+        ("web.metered_jpeg_quality", "Data saver: JPEG quality", "number",
+         "0-100 for the overlay and aiming views; 55 is the frugal default"),
+        ("web.aim_metered_fps", "Data saver: aiming frames/second", "text",
+         "the aiming view is full-size frames, so this one costs the most"),
+        ("web.local_networks", "Networks that are free", "text",
+         "viewers here get full quality; anything else is treated as metered"),
     )
 
     def _set(tree, path, value):
@@ -1264,6 +1290,17 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             return jsonify(ok=False,
                            error="Set the Left and Right points first."), 200
         return jsonify(ok=True)
+
+    @app.route("/settings/datasaver", methods=["POST"])
+    @protected
+    def settings_datasaver():
+        if settings is None:
+            abort(503)
+        try:
+            settings.set_data_saver(request.form.get("data_saver", "auto"))
+        except ValueError as e:
+            return _settings_page("system", sys_err=str(e))
+        return _settings_page("system", sys_msg="Data saver setting saved.")
 
     @app.route("/settings/sweep", methods=["POST"])
     @protected

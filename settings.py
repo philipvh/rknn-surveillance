@@ -213,6 +213,27 @@ class Settings:
         self.set("sweep_dwell_s", max(0.5, min(float(seconds), 60.0)))
         return self.sweep_dwell_s
 
+    # ---------------------------------------------------------- data saver
+    # Whether a viewer off the board's own network gets a reduced picture.
+    # "auto" is the sensible default on a small bundle; on a large one the
+    # quality is worth more than the saving, and that is the operator's call
+    # rather than something to infer.
+    SAVER_MODES = ("auto", "off", "on")
+
+    @property
+    def data_saver(self):
+        v = str(self.get("data_saver", "auto") or "auto").lower()
+        return v if v in self.SAVER_MODES else "auto"
+
+    def set_data_saver(self, mode):
+        mode = str(mode or "auto").lower()
+        if mode not in self.SAVER_MODES:
+            raise ValueError("mode must be one of %s"
+                             % ", ".join(self.SAVER_MODES))
+        self.set("data_saver", mode)
+        log.info("data saver: %s", mode)
+        return mode
+
     @property
     def sweep_speed(self):
         """How fast the dome moves, or None to leave the camera as it is.

@@ -101,6 +101,21 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
 #metered { position:absolute; left:10px; top:10px; padding:4px 9px;
   background:rgba(44,28,20,.92); color:#e0a64a; font-size:11px;
   font-weight:bold; letter-spacing:.06em; border-radius:3px; z-index:5; }
+/* The mobile bundle, on the tab people actually look at. It is the one
+   number here that turns into money, and the club found that out from an
+   invoice rather than from the panel. */
+.dataline { margin-top:4px; padding:8px 10px; border-radius:4px;
+  background:#131c18; border:1px solid #24322c;
+  color:#8fa39a; font-size:13px; line-height:1.5; display:none; }
+.dataline.on { display:block; }
+.dataline b { color:#dfe7e1; font-weight:bold; }
+.dataline .meter { display:block; height:6px; margin-top:6px; border-radius:3px;
+  background:#0f1714; overflow:hidden; }
+.dataline .meter i { display:block; height:100%; background:#2f6a53; }
+.dataline.warn { border-color:#7a5a2a; color:#e0a64a; }
+.dataline.warn .meter i { background:#7a5a2a; }
+.dataline.over { border-color:#7a3b2a; color:#e0a64a; }
+.dataline.over .meter i { background:#7a3b2a; }
 #msg { position:absolute; left:10px; bottom:10px; right:10px; padding:8px 12px;
   background:rgba(20,10,4,.92); color:#e0a64a; font-size:14px; border-radius:3px;
   display:none; }
@@ -160,6 +175,7 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
         {% endif %}
         <a class="big" href="/media">Stills &amp; clips</a>
         <a class="big" href="/settings">Settings</a>
+        <div id="datause" class="dataline"></div>
       </div>
 
       <div class="pane" id="pane-manual">
@@ -425,6 +441,25 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
     }, false);
   }
 
+  /* ---- mobile bundle ---------------------------------------------------
+     Shown on the View tab because it is the one number on this panel that
+     becomes money, and because the way it was found out last time was an
+     invoice. Hidden entirely when no bundle is configured, so a board on
+     fixed wiring is not nagged about a limit it does not have. */
+  var dataEl = document.getElementById('datause');
+  function updateData(u) {
+    if (!dataEl) return;
+    if (!u || !u.limit_gb) { dataEl.className = 'dataline'; return; }
+    var pct = u.percent === null ? 0 : u.percent;
+    var cls = 'dataline on' + (u.over ? ' over' : (u.warn ? ' warn' : ''));
+    var note = u.over ? ' &mdash; bundle used up'
+                      : (u.warn ? ' &mdash; running low' : '');
+    dataEl.className = cls;
+    dataEl.innerHTML = 'Mobile data <b>' + u.used_gb + ' GB</b> of ' +
+      u.limit_gb + ' GB this month' + note +
+      '<span class="meter"><i style="width:' + Math.min(pct, 100) + '%"></i></span>';
+  }
+
   /* ---- tabs ------------------------------------------------------------
      Leaving a tab that can move the camera also releases the motors: a
      finger sliding off a direction button onto the tab strip would otherwise
@@ -499,6 +534,7 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       a.innerHTML = s.armed ? 'Armed' : 'Disarmed';
       a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
       if (s.sweep) updateSweep(s.sweep);
+      updateData(s.usage);
       /* Show the near-live PiP whenever the camera is moving on its own, so a
          sweep is watchable without the transcode's lag. */
       aimAuto = (s.state === 'sweeping' || s.state === 'scanning'
