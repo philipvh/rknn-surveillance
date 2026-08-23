@@ -77,11 +77,28 @@ button.sw .knob { position:absolute; top:3px; left:3px; width:22px; height:22px;
   transition:left .15s ease, background .15s ease; }
 button.sw.on { background:#2f6a53; border-color:#3f8a6c; }
 button.sw.on .knob { left:27px; background:#eef5f1; }
+/* Two tabs, so the everyday view is not buried under the controls. "View" is
+   what the wall shows almost always; "Manual" is where anything that moves the
+   camera lives, which is also a mild deterrent to idle prodding. */
+#tabs { display:-webkit-flex; display:flex; margin-bottom:10px; }
+#tabs .tab { -webkit-flex:1; flex:1; font-size:14px; padding:9px 6px;
+  border-radius:0; background:#131c18; border:1px solid #24322c;
+  color:#8fa39a; font-weight:bold; letter-spacing:.06em; }
+#tabs .tab:first-child { border-radius:4px 0 0 4px; }
+#tabs .tab:last-child { border-radius:0 4px 4px 0; border-left:0; }
+#tabs .tab.on { background:#2f6a53; border-color:#3f8a6c; color:#eef5f1; }
+.pane { display:none; }
+.pane.on { display:block; }
+/* The two places a person actually goes. Big, because on the wall they were
+   getting lost as small links under a column of controls. */
+a.big { display:block; padding:18px 14px; margin-bottom:10px;
+  background:#1b2721; border:1px solid #2f3f38; border-radius:4px;
+  color:#dfe7e1; text-decoration:none; font-size:17px; font-weight:bold;
+  text-align:center; }
+a.big:active { background:#2f6a53; border-color:#3f8a6c; }
 #msg { position:absolute; left:10px; bottom:10px; right:10px; padding:8px 12px;
   background:rgba(20,10,4,.92); color:#e0a64a; font-size:14px; border-radius:3px;
   display:none; }
-#links a { color:#62bb99; font-size:14px; text-decoration:none; display:block;
-  padding:8px 0; border-bottom:1px solid #1d2925; }
 @media (max-width: 720px) {
   #body { -webkit-flex-direction:column; flex-direction:column; }
   #pad { -webkit-flex:0 0 auto; flex:0 0 auto; border-left:0; border-top:1px solid #24322c; }
@@ -119,76 +136,83 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       <div id="msg"></div>
     </div>
     <div id="pad">
-      {% if has_detector %}
-      <div class="swrow">
-        <span class="swlabel">Detector overlays</span>
-        <button id="overlays" class="sw on" role="switch"
-                aria-checked="true" title="draw detection boxes on the live view"><span class="knob"></span></button>
+      <div id="tabs">
+        <button class="tab on" data-tab="view">View</button>
+        <button class="tab" data-tab="manual">Manual</button>
       </div>
-      {% endif %}
+
+      <div class="pane on" id="pane-view">
+        {% if has_detector %}
+        <div class="swrow">
+          <span class="swlabel">Detector overlays</span>
+          <button id="overlays" class="sw on" role="switch"
+                  aria-checked="true" title="draw detection boxes on the live view"><span class="knob"></span></button>
+        </div>
+        {% endif %}
+        <a class="big" href="/media">Stills &amp; clips</a>
+        <a class="big" href="/settings">Settings</a>
+      </div>
+
+      <div class="pane" id="pane-manual">
       {% if has_ptz %}
-      <div class="dpad">
-        <div class="row">
-          <button class="spacer"></button>
-          <button data-move="up">&#9650;</button>
-          <button class="spacer"></button>
+        <div class="dpad">
+          <div class="row">
+            <button class="spacer"></button>
+            <button data-move="up">&#9650;</button>
+            <button class="spacer"></button>
+          </div>
+          <div class="row">
+            <button data-move="left">&#9664;</button>
+            <button data-stop="1">STOP</button>
+            <button data-move="right">&#9654;</button>
+          </div>
+          <div class="row">
+            <button class="spacer"></button>
+            <button data-move="down">&#9660;</button>
+            <button class="spacer"></button>
+          </div>
         </div>
         <div class="row">
-          <button data-move="left">&#9664;</button>
-          <button data-stop="1">STOP</button>
-          <button data-move="right">&#9654;</button>
+          <button data-zoom="in">ZOOM +</button>
+          <button data-zoom="out">ZOOM &minus;</button>
+        </div>
+        <h3>Trigger sweep</h3>
+        <div class="swrow">
+          <span class="swlabel">Sweep when triggered</span>
+          <button id="sweeptoggle" class="sw" role="switch" aria-checked="false"
+                  title="on a trigger, oscillate between the two saved views"><span class="knob"></span></button>
         </div>
         <div class="row">
-          <button class="spacer"></button>
-          <button data-move="down">&#9660;</button>
-          <button class="spacer"></button>
+          <button class="small" id="setleft" title="aim left, then save this view">Set Left</button>
+          <button class="small" id="setright" title="aim right, then save this view">Set Right</button>
+          <button class="small" id="sethome" title="aim to the rest view, then save it as home">Set Home</button>
         </div>
-      </div>
-      <div class="row">
-        <button data-zoom="in">ZOOM +</button>
-        <button data-zoom="out">ZOOM &minus;</button>
-      </div>
-      <h3>Trigger sweep</h3>
-      <div class="swrow">
-        <span class="swlabel">Sweep when triggered</span>
-        <button id="sweeptoggle" class="sw" role="switch" aria-checked="false"
-                title="on a trigger, oscillate between the two saved views"><span class="knob"></span></button>
-      </div>
-      <div class="row">
-        <button class="small" id="setleft" title="aim left, then save this view">Set Left</button>
-        <button class="small" id="setright" title="aim right, then save this view">Set Right</button>
-        <button class="small" id="sethome" title="aim to the rest view, then save it as home">Set Home</button>
-      </div>
-      <div class="row">
-        <button class="small" id="sweepnow" title="run one Left-Right-home cycle to check the aim">Sweep now</button>
-      </div>
-      <h3>Presets</h3>
-      <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
-      {% for p in presets %}{% if p != home %}
-      <div class="row"><button class="wide" data-preset="{{ p }}">{{ p }}</button></div>
-      {% endif %}{% endfor %}
-      <h3>System</h3>
-      <div class="row"><button class="wide" id="scan">Scan now</button></div>
-      <div class="row">
-        <button class="small" id="disarm2h">Disarm 2h</button>
-        <button class="small" id="armnow">Arm now</button>
-      </div>
-      <div class="row"><button class="small" id="autoarm">Back to schedule</button></div>
-      {% if has_speaker %}
-      <div class="row">
-        <button class="small" id="mute2h">Mute speaker 2h</button>
-        <button class="small" id="unmute">Unmute</button>
-      </div>
-      {% endif %}
+        <div class="row">
+          <button class="small" id="sweepnow" title="run one Left-Right-home cycle to check the aim">Sweep now</button>
+        </div>
+        <h3>Presets</h3>
+        <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
+        {% for p in presets %}{% if p != home %}
+        <div class="row"><button class="wide" data-preset="{{ p }}">{{ p }}</button></div>
+        {% endif %}{% endfor %}
       {% else %}
-      <h3>Camera control unavailable</h3>
-      <p style="color:#8fa39a;font-size:14px">This process is serving
-      recordings only. Start the surveillance service for PTZ.</p>
+        <h3>Camera control unavailable</h3>
+        <p style="color:#8fa39a;font-size:14px">This process is serving
+        recordings only. Start the surveillance service for PTZ.</p>
       {% endif %}
-      <h3>Recordings</h3>
-      <div id="links">
-        <a href="/media">Stills &amp; clips</a>
-        <a href="/settings">Settings</a>
+        <h3>System</h3>
+        <div class="row"><button class="wide" id="scan">Scan now</button></div>
+        <div class="row">
+          <button class="small" id="disarm2h">Disarm 2h</button>
+          <button class="small" id="armnow">Arm now</button>
+        </div>
+        <div class="row"><button class="small" id="autoarm">Back to schedule</button></div>
+        {% if has_speaker %}
+        <div class="row">
+          <button class="small" id="mute2h">Mute speaker 2h</button>
+          <button class="small" id="unmute">Unmute</button>
+        </div>
+        {% endif %}
       </div>
 
       <div id="legal">
@@ -390,6 +414,31 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
         } else { handle(r); }
       });
     }, false);
+  }
+
+  /* ---- tabs ------------------------------------------------------------
+     Leaving a tab that can move the camera also releases the motors: a
+     finger sliding off a direction button onto the tab strip would otherwise
+     leave a move running until the server's deadline caught it. */
+  var tabs = document.querySelectorAll('#tabs .tab');
+  function showTab(name) {
+    var i, t, panes = document.querySelectorAll('.pane');
+    for (i = 0; i < tabs.length; i++) {
+      t = tabs[i];
+      t.className = 'tab' + (t.getAttribute('data-tab') === name ? ' on' : '');
+    }
+    for (i = 0; i < panes.length; i++) {
+      panes[i].className = 'pane' + (panes[i].id === 'pane-' + name ? ' on' : '');
+    }
+  }
+  for (var ti = 0; ti < tabs.length; ti++) {
+    (function (t) {
+      t.addEventListener('click', function (e) {
+        e.preventDefault();
+        stopMove();
+        showTab(t.getAttribute('data-tab'));
+      }, false);
+    })(tabs[ti]);
   }
 
   /* anything that means the page is going away must release the motors */

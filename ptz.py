@@ -112,9 +112,20 @@ class MotorBudget:
     def remaining(self, source="auto"):
         return max(0.0, self.limits[source] - self.spent(source))
 
-    def check(self, seconds, source="auto", is_scan_start=False):
+    def check(self, seconds, source="auto", is_scan_start=False,
+              essential=False):
+        """Whether this movement is allowed now.
+
+        `essential` is for the one move that must not be refused: coming home.
+        The budget exists to stop repetitive motion wearing the dome out, not
+        to strand it facing a corner because the hour's allowance ran out
+        mid-incident. Essential moves are still charged, so they show in the
+        spend and cannot be used to launder an ordinary sweep.
+        """
         if source not in self.limits:
             return BudgetDecision(False, f"unknown budget source {source!r}")
+        if essential:
+            return BudgetDecision(True)
         now = self._clock()
         with self._lock:
             self._prune(now)
@@ -490,9 +501,11 @@ class PTZ:
     def list_presets(self):
         return self._cam().list_presets()
 
-    def goto_preset(self, name, source="auto", is_scan_start=False):
+    def goto_preset(self, name, source="auto", is_scan_start=False,
+                    essential=False):
         decision = self.budget.check(self.preset_estimate_s, source=source,
-                                     is_scan_start=is_scan_start)
+                                     is_scan_start=is_scan_start,
+                                     essential=essential)
         if not decision.allowed:
             raise BudgetExceeded(decision.reason)
         self._cam().goto_preset(name)

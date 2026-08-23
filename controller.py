@@ -112,6 +112,7 @@ class Controller:
         self.manual_timeout_s = float(c.get("manual_timeout_s", 180.0))
         self.return_timeout_s = float(c.get("return_timeout_s", 30.0))
         self.pir_required_to_scan = bool(c.get("pir_required_to_scan", True))
+        self.sweep_retry_s = float(c.get("sweep_retry_s", 120.0))
 
         t = (cfg._get("trigger", default={}) or {})
         self.pre_roll_s = float(t.get("pre_roll_s", 2.0))
@@ -128,6 +129,11 @@ class Controller:
         self._preset_index = 0
         self._sweep_index = 0
         self._sweep_once = False        # a one-shot manual sweep is running
+        # When the motor budget refuses a sweep, stop asking for a while. Without
+        # this a person in view re-triggers the attempt on every detection frame:
+        # sweeping -> refused -> returning -> refused -> parked -> sweeping, about
+        # once a second, which moves nothing and floods the journal.
+        self._sweep_blocked_until = 0.0
         self._pir_active = False
         self._pir_last_release = None
         self._pir_last_duration = 0.0
@@ -265,7 +271,7 @@ class Controller:
             if self._pir_recent():
                 inc.pir_corroborated = True
 
-        if self.sweep_ready():
+        if self.sweep_ready() and not self._sweep_blocked():
             # With a sweep configured, a sighting drives the sweep rather than a
             # lock-on: the scene is wider than the view, so covering both halves
             # matters more than centring this one. The window is already
@@ -354,6 +360,10 @@ class Controller:
         except Exception:
             return False
 
+    def _sweep_blocked(self):
+        """True while a budget refusal is still in force."""
+        return self._clock() < self._sweep_blocked_until
+
     def _sweep_dwell(self):
         s = self.settings
         try:
@@ -372,13 +382,16 @@ class Controller:
         # between two saved positions for as long as the trigger persists. It
         # takes precedence over both the preset patrol and the fixed-camera
         # hold: it is the deliberate answer to "the camera cannot see it all".
-        if self.sweep_ready():
+        if self.sweep_ready() and not self._sweep_blocked():
             self._sweep_index = 0
             self._deadline = None
             self._go(State.SWEEPING, "sweep on trigger")
             return
-        if not self.can_move:
-            self._go(State.HOLDING, "camera is fixed; watching the view it has")
+        if not self.can_move or self._sweep_blocked():
+            # Nothing to sweep with right now: watch the view we have rather
+            # than retry a move that will be refused again.
+
+            self._go(State.HOLDING, "watching the view it has")
             return
         self._preset_index = 0
         self._go(State.SCANNING, "lights up")
@@ -450,7 +463,10 @@ class Controller:
                     is_scan_start=(self._sweep_index == 1 and not one_shot))
             except BudgetExceeded as e:
                 self._sweep_once = False
-                self._go(State.RETURNING, f"motor budget: {e}")
+                self._sweep_blocked_until = self._clock() + self.sweep_retry_s
+                log.warning("sweep refused by the motor budget; not asking "
+                            "again for %.0fs: %s", self.sweep_retry_s, e)
+                self._go(State.RETURNING, "motor budget")
                 return
             self._deadline = (self._clock() + self._sweep_dwell()
                               + self.ptz.preset_estimate_s)
@@ -507,10 +523,12 @@ class Controller:
             return
         if self._deadline is None:
             try:
-                self.ptz.goto_preset(self.home, source="auto")
+                # essential: the budget exists to stop repetitive motion wearing
+                # the dome, not to strand it. A camera left facing a corner all
+                # night is a worse outcome than one move over the cap, and there
+                # is at most one of these per incident, so it cannot run away.
+                self.ptz.goto_preset(self.home, source="auto", essential=True)
             except BudgetExceeded as e:
-                # Refusing to return home would leave the camera pointing at a
-                # corner all night, so this is worth saying loudly.
                 log.error("could not return home, motor budget refused: %s", e)
                 self._go(State.PARKED, "budget refused the return home")
                 return

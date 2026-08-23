@@ -1206,6 +1206,31 @@ class _StubController:
         return self.ready
 
 
+class TestPanelLayout(Base):
+    """The wall panel's right-hand pane: two tabs, not one long column."""
+
+    def test_both_tabs_render(self):
+        body = self.c.get("/", headers=self.auth()).data
+        self.assertIn(b'data-tab="view"', body)
+        self.assertIn(b'data-tab="manual"', body)
+        self.assertIn(b'id="pane-view"', body)
+        self.assertIn(b'id="pane-manual"', body)
+
+    def test_the_two_destinations_are_prominent_not_footnotes(self):
+        # They were small links lost under a column of controls on the wall.
+        body = self.c.get("/", headers=self.auth()).data.decode()
+        self.assertIn('class="big" href="/media"', body)
+        self.assertIn('class="big" href="/settings"', body)
+
+    def test_movement_controls_live_in_the_manual_tab(self):
+        body = self.c.get("/", headers=self.auth()).data.decode()
+        manual = body.split('id="pane-manual"', 1)[1]
+        view = body.split('id="pane-view"', 1)[1].split('id="pane-manual"', 1)[0]
+        self.assertIn('data-move="left"', manual)
+        self.assertNotIn('data-move=', view,
+                         "a control that moves the camera is on the idle tab")
+
+
 class TestSweepNow(Base):
     def setUp(self):
         super().setUp()

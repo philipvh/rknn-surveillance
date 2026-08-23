@@ -41,7 +41,8 @@ class FakePTZ:
     def settled(self):
         return True
 
-    def goto_preset(self, name, source="auto", is_scan_start=False):
+    def goto_preset(self, name, source="auto", is_scan_start=False,
+                    essential=False):
         self.gotos.append(name)
 
 

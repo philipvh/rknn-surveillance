@@ -36,17 +36,22 @@ class FakePTZ:
         self._settled = True
         self.gotos = []
         self.scan_starts = []
+        self.essentials = []
         self.refuse = False
         self.at = None
 
     def settled(self):
         return self._settled
 
-    def goto_preset(self, name, source="auto", is_scan_start=False):
-        if self.refuse:
+    def goto_preset(self, name, source="auto", is_scan_start=False,
+                    essential=False):
+        # `essential` is how coming home survives an exhausted budget; a fake
+        # that refuses it too would hide the very case it exists for.
+        if self.refuse and not essential:
             raise BudgetExceeded("motor budget spent")
         self.gotos.append(name)
         self.scan_starts.append(is_scan_start)
+        self.essentials.append(essential)
         self.at = name
 
 
@@ -779,6 +784,41 @@ class TestTriggerSweep(unittest.TestCase):
         self.settings._left = False
         self.assertFalse(self.c.sweep_once())
         self.assertIsNot(self.c.state, State.SWEEPING)
+
+    def test_a_refused_sweep_does_not_retry_every_frame(self):
+        # The bug this exists for: with the budget spent, every detection sent
+        # the machine round parked -> sweeping -> returning -> parked about once
+        # a second, moving nothing and filling the journal.
+        self.ptz.refuse = True
+        for _ in range(20):
+            self.see()
+            self.advance(0.5)
+        sweeps = [t for t in self.c.transitions if t[2] == "sweeping"]
+        self.assertLessEqual(len(sweeps), 2,
+                             "a refused sweep kept being retried: %d attempts"
+                             % len(sweeps))
+
+    def test_after_a_refusal_it_holds_instead_of_churning(self):
+        self.ptz.refuse = True
+        self.see()
+        self.advance(2.0)
+        self.see()
+        self.advance(2.0)
+        # HOLDING is the stable answer: still recording, not fighting the budget
+        self.assertIn(self.c.state, (State.HOLDING, State.RETURNING,
+                                     State.PARKED))
+
+    def test_coming_home_is_allowed_even_with_the_budget_spent(self):
+        # A camera left facing a corner all night is worse than one move over
+        # the cap, so the return home is marked essential.
+        self.ptz.refuse = True
+        self.see()
+        self.advance(90.0)
+        self.assertIn("Home", self.ptz.gotos,
+                      "the camera was stranded off home by the budget")
+        i = self.ptz.gotos.index("Home")
+        self.assertTrue(self.ptz.essentials[i],
+                        "the return home was not marked essential")
 
     def test_budget_refusal_ends_the_sweep(self):
         self.ptz.refuse = True
