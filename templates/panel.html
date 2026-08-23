@@ -96,6 +96,11 @@ a.big { display:block; padding:18px 14px; margin-bottom:10px;
   color:#dfe7e1; text-decoration:none; font-size:17px; font-weight:bold;
   text-align:center; }
 a.big:active { background:#2f6a53; border-color:#3f8a6c; }
+/* Shown only to a viewer coming in over the metered link, so a coarse
+   picture reads as a deliberate saving rather than a broken camera. */
+#metered { position:absolute; left:10px; top:10px; padding:4px 9px;
+  background:rgba(44,28,20,.92); color:#e0a64a; font-size:11px;
+  font-weight:bold; letter-spacing:.06em; border-radius:3px; z-index:5; }
 #msg { position:absolute; left:10px; bottom:10px; right:10px; padding:8px 12px;
   background:rgba(20,10,4,.92); color:#e0a64a; font-size:14px; border-radius:3px;
   display:none; }
@@ -133,6 +138,9 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
     <div id="view">
       <img id="live" alt="live view">
       <div id="aimbox"><span id="aimtag">LIVE &middot; aiming</span><img id="aim" alt="aiming view"></div>
+      {% if metered %}
+      <div id="metered">DATA SAVER &middot; remote link, reduced picture</div>
+      {% endif %}
       <div id="msg"></div>
     </div>
     <div id="pad">
@@ -145,8 +153,9 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
         {% if has_detector %}
         <div class="swrow">
           <span class="swlabel">Detector overlays</span>
-          <button id="overlays" class="sw on" role="switch"
-                  aria-checked="true" title="draw detection boxes on the live view"><span class="knob"></span></button>
+          <button id="overlays" class="sw{% if not metered %} on{% endif %}" role="switch"
+                  aria-checked="{{ 'false' if metered else 'true' }}"
+                  title="draw detection boxes on the live view"><span class="knob"></span></button>
         </div>
         {% endif %}
         <a class="big" href="/media">Stills &amp; clips</a>
@@ -505,9 +514,11 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
      MJPEG in an <img>. If the stream dies the browser leaves a broken
      image, so reload it on error rather than showing nothing all night. */
   var live = document.getElementById('live');
-  /* Overlays on by default: the boxes are the reason to watch the panel
-     rather than the camera's own app, and the raw view is one tap away. */
-  var showDetector = true;
+  /* Overlays on by default -- the boxes are the reason to watch the panel
+     rather than the camera's own app, and the raw view is one tap away. Not
+     over a metered link though: the overlay feed costs about two and a half
+     times the plain one, and on a 4G bundle that is real money. */
+  var showDetector = {{ 'false' if metered else 'true' }};
 
   function startStream() {
     var path = showDetector ? '/detect.mjpg' : '/stream.mjpg';

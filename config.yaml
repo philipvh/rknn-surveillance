@@ -129,6 +129,22 @@ web:
   stream_fps: 3              # snapshot mode: how often to refresh
   ffmpeg_scale: 960          # ffmpeg mode: output width
   idle_fps: 1                # slower refresh when nobody is touching it
+  aim_fps: 6                 # the near-live aiming picture-in-picture
+
+  # Metered links. Video is the only thing here big enough to matter on a data
+  # bundle: measured on the club board, the overlay view runs about 0.8 GB an
+  # hour and the aiming feed over 3, and a 5 GB bundle went in a day with 92%
+  # of it remote viewing. So viewers on the board's own wiring get the full
+  # picture and everyone else gets a cheaper one.
+  #
+  # Anything NOT in local_networks is assumed to cost money -- including an
+  # address the board cannot parse, because guessing wrong in that direction is
+  # only a coarser picture, while guessing wrong the other way is a bill.
+  local_networks: [127.0.0.0/8, 192.168.91.0/24, 192.168.92.0/24]
+  metered_fps: 1             # frames per second for a remote viewer
+  metered_scale: 480         # and how wide
+  metered_quality: 12        # ffmpeg -q:v; higher is smaller and coarser
+  aim_metered_fps: 2         # the aiming feed is full-size JPEGs, so this bites
 
   # Basic auth. Password lives in secrets.yaml under web.password.
   auth_required: true

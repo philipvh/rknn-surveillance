@@ -1206,6 +1206,41 @@ class _StubController:
         return self.ready
 
 
+class TestMeteredLink(Base):
+    """A viewer over the 4G tunnel costs money; one on the board's own wiring
+    does not. The streams are the only thing here big enough to matter."""
+
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}     # the wall tablet on the AP
+    REMOTE = {"REMOTE_ADDR": "10.8.2.9"}        # somebody over the VPN
+
+    def test_the_wall_tablet_gets_the_full_picture(self):
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base=self.LOCAL).data
+        self.assertNotIn(b'id="metered"', body)
+        self.assertIn(b'var showDetector = true', body)
+
+    def test_a_remote_viewer_is_warned_and_gets_overlays_off(self):
+        # The overlay feed costs about 2.5x the plain one.
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base=self.REMOTE).data
+        self.assertIn(b'id="metered"', body)
+        self.assertIn(b'var showDetector = false', body)
+
+    def test_the_aiming_feed_is_capped_for_a_remote_viewer(self):
+        # Full-size JPEGs at 6fps is over 3 GB an hour; asking for more than
+        # the cap must not be honoured.
+        r = self.c.get("/aim.mjpg?fps=10", headers=self.auth(),
+                       environ_base=self.REMOTE)
+        self.assertIn("multipart/x-mixed-replace", r.headers["Content-Type"])
+        r.response.close()
+
+    def test_an_unparseable_address_is_assumed_to_cost_money(self):
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base={"REMOTE_ADDR": ""}).data
+        self.assertIn(b'id="metered"', body,
+                      "an unknown client was assumed free")
+
+
 class TestPanelLayout(Base):
     """The wall panel's right-hand pane: two tabs, not one long column."""
 
