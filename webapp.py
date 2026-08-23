@@ -71,7 +71,8 @@ def _unauthorised(realm="RKNN surveillance"):
 
 
 def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
-               announcer=None, live=None, concat=None, settings=None):
+               announcer=None, live=None, concat=None, settings=None,
+               usage=None):
     """ptz/controller may be None -- the app then serves recordings only."""
     app = Flask(__name__, template_folder=str(BASE_DIR / "templates"),
                 static_folder=str(BASE_DIR / "static"))
@@ -467,6 +468,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             wifi_err="", wifi_msg="", wifi=None, wifi_networks=[],
             wifi_available=True, vpn=None, checked="", vpn_control=False,
             disk=_disk_report(),
+            usage=(usage.report() if usage is not None else None),
             sweep_enabled=(settings.sweep_enabled
                            if settings is not None else False),
             sweep_dwell=(settings.sweep_dwell_s
@@ -602,6 +604,10 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
          "0-1; higher means fewer, surer detections"),
         ("detection.target_fps", "Detector frames/second", "text",
          "how often the NPU is asked; the camera keeps recording regardless"),
+        ("usage.limit_gb", "Mobile bundle (GB)", "text",
+         "for the data meter above; 0 to show usage without a percentage"),
+        ("usage.billing_day", "Bundle resets on day", "number",
+         "day of the month the allowance starts again (1-28)"),
     )
 
     def _set(tree, path, value):
@@ -1116,6 +1122,15 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                 out["health"] = health.status(cfg.events_root)
             except Exception:
                 log.exception("health status failed")
+        if usage is not None:
+            try:
+                u = usage.report()
+                out["usage"] = {"used_gb": u["used_gb"],
+                                "limit_gb": u["limit_gb"],
+                                "percent": u["percent"],
+                                "warn": u["warn"], "over": u["over"]}
+            except Exception:
+                log.exception("data usage status failed")
         if settings is not None:
             try:
                 out["sweep"] = {

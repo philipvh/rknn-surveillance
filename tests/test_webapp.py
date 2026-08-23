@@ -1206,6 +1206,59 @@ class _StubController:
         return self.ready
 
 
+class TestUsageMeter(Base):
+    """The bundle counter on the System tab."""
+
+    def setUp(self):
+        super().setUp()
+        from datausage import DataUsage
+        net = Path(self.tmp.name) / "net" / "wan0" / "statistics"
+        net.mkdir(parents=True)
+        (net / "rx_bytes").write_text(str(3 * 1073741824))
+        (net / "tx_bytes").write_text("0")
+        self.usage = DataUsage(Path(self.tmp.name) / "usage.json",
+                               iface="wan0", limit_gb=5.0, billing_day=1,
+                               sys_net=str(Path(self.tmp.name) / "net"))
+        self.usage._last_raw = 0            # pretend we have been watching
+        self.usage._last_iface = "wan0"
+        self.usage.sample()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json")
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store,
+                              usage=self.usage)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def test_the_system_tab_shows_the_bundle(self):
+        body = self.c.get("/settings/system", headers=self.auth()).data
+        self.assertIn(b"Mobile data", body)
+        self.assertIn(b"3.0 GB", body)
+        self.assertIn(b"of 5.0 GB", body)
+
+    def test_it_warns_past_eighty_percent(self):
+        (Path(self.tmp.name) / "net" / "wan0" / "statistics"
+         / "rx_bytes").write_text(str(int(4.5 * 1073741824)))
+        self.usage.sample()
+        body = self.c.get("/settings/system", headers=self.auth()).data
+        self.assertIn(b"80%", body)
+
+    def test_status_carries_it_so_the_panel_can_warn(self):
+        s = self.c.get("/api/status", headers=self.auth()).get_json()
+        self.assertIn("usage", s)
+        self.assertEqual(s["usage"]["used_gb"], 3.0)
+        self.assertFalse(s["usage"]["warn"])
+
+    def test_no_meter_configured_is_not_an_error(self):
+        app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                         schedule=self.sched, settings=self.store)
+        app.config["TESTING"] = True
+        c = app.test_client()
+        r = c.get("/settings/system", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn(b"Mobile data", r.data)
+
+
 class TestMeteredLink(Base):
     """A viewer over the 4G tunnel costs money; one on the board's own wiring
     does not. The streams are the only thing here big enough to matter."""

@@ -378,6 +378,42 @@ loaded once with these values before saving, so it will start.</div>
 <div class="note err">{{ sys_err }}</div>
 {% endif %}
 
+{% if usage and usage.iface %}
+<h3>Mobile data</h3>
+{% if usage.over %}
+<div class="note err">The bundle is used up &mdash; anything further is likely
+  being charged, or throttled.</div>
+{% elif usage.warn %}
+<div class="note warn">Over 80% of the bundle is gone with the month still
+  running.</div>
+{% endif %}
+<p id="hint">
+  Measured on <code>{{ usage.iface }}</code>, counting since
+  {{ usage.period_start }}.
+  <b style="color:#8fa39a">{{ usage.used_gb }} GB</b> used{% if usage.limit_gb %}
+  of {{ usage.limit_gb }} GB{% endif %}; {{ usage.today_gb }} GB today.
+</p>
+{% if usage.percent is not none %}
+<div class="bar"><div class="fill"
+     style="width:{{ [usage.percent, 100]|min }}%;{% if usage.warn %}background:#7a5a2a{% endif %}"></div></div>
+<p class="sub" style="margin-top:4px">{{ usage.percent }}% of the bundle</p>
+{% endif %}
+{% if usage.days %}
+<div class="table-wrap">
+  <table class="tbl">
+    <tr><th>Day</th><th>Used</th></tr>
+    {% for d in usage.days|reverse %}
+    <tr><td>{{ d.day }}</td><td>{{ d.gb }} GB</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+<p class="sub">Live video is the only thing here big enough to matter: the
+  overlay view costs about 0.8 GB an hour to a viewer on the board's own
+  network. Anyone watching from outside already gets a reduced picture, which
+  is roughly a tenth of that. The wall tablet never crosses this link.</p>
+{% endif %}
+
 {% if disk.disk %}
 <h3>Storage</h3>
 <p id="hint">Recordings live at <code>{{ disk.disk.root }}</code>.

@@ -146,6 +146,15 @@ web:
   metered_quality: 12        # ffmpeg -q:v; higher is smaller and coarser
   aim_metered_fps: 2         # the aiming feed is full-size JPEGs, so this bites
 
+# The mobile bundle, if the uplink is one. Purely so the number is visible on
+# the panel before it turns up on a bill -- nothing here throttles or cuts off.
+# Set limit_gb: 0 to show usage without a percentage.
+usage:
+  limit_gb: 5              # size of the bundle
+  billing_day: 1           # day of the month it resets (1-28)
+  interface: null          # null = whichever interface has the default route
+  state: state/usage.json
+
   # Basic auth. Password lives in secrets.yaml under web.password.
   auth_required: true
   auth_user: admin

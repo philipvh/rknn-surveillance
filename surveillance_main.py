@@ -37,6 +37,7 @@ from tracker import Tracker
 from health import ClockGuard, HealthMonitor, SystemdNotifier
 from concat_mgr import ConcatJob, ConcatManager
 from controller import Controller
+from datausage import DataUsage
 from frames import LatestFrame
 from schedule import Schedule
 from segments import DAY_FMT, TS_FMT, list_segments_between
@@ -376,6 +377,28 @@ def main(argv=None):
     trigger = trigger_mod.TriggerInput(cfg, on_event=controller.on_pir)
     trigger.start()
 
+    # The mobile-data meter. Sampling the kernel's own counters needs no root
+    # and no extra package -- and it is the same number the bundle is billed on.
+    u = (cfg._get("usage", default={}) or {})
+    usage = DataUsage(
+        cfg.resolve(u.get("state", "state/usage.json")),
+        iface=u.get("interface") or None,
+        limit_gb=u.get("limit_gb", 0),
+        billing_day=u.get("billing_day", 1))
+    if usage.iface:
+        log.info("metering data on %s%s", usage.iface,
+                 f", bundle {usage.limit_gb:g} GB" if usage.limit_gb else "")
+
+    def usage_loop():
+        while True:
+            try:
+                usage.sample()
+            except Exception:
+                log.exception("could not sample the data counter")
+            time.sleep(60)
+
+    threading.Thread(target=usage_loop, daemon=True, name="usage").start()
+
     # The wall panel runs in this process on purpose: it then drives the same
     # PTZ object as the controller, so every button goes through the same
     # deadline watchdog and the same motor budget. A separate service would
@@ -383,7 +406,7 @@ def main(argv=None):
     web = cfg.web or {}
     app = create_app(cfg, ptz=ptz, controller=controller, schedule=schedule,
                      health=health, announcer=announcer, live=live,
-                     concat=concat_mgr, settings=user_settings)
+                     concat=concat_mgr, settings=user_settings, usage=usage)
 
     def serve():
         try:
