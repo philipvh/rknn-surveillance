@@ -1227,6 +1227,9 @@ class TestSweepNow(Base):
         self.assertTrue(r.get_json()["ok"])
         self.assertEqual(r.get_json()["name"], "Home")
         self.assertIn("ptzAddPresetPoint", self.cam.calls)
+        self.assertTrue(self.store.sweep_home_saved)
+        s = self.c.get("/api/status", headers=self.auth()).get_json()
+        self.assertTrue(s["sweep"]["home_saved"])
 
     def test_sweep_now_reports_when_endpoints_missing(self):
         self.ctrl.ready = False

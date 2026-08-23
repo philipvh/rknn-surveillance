@@ -221,10 +221,15 @@ class Settings:
     def sweep_right_saved(self):
         return bool(self.get("sweep_right_saved", False))
 
+    @property
+    def sweep_home_saved(self):
+        return bool(self.get("sweep_home_saved", False))
+
     def mark_sweep_saved(self, side, saved=True):
-        key = {"left": "sweep_left_saved", "right": "sweep_right_saved"}.get(side)
+        key = {"left": "sweep_left_saved", "right": "sweep_right_saved",
+               "home": "sweep_home_saved"}.get(side)
         if key is None:
-            raise ValueError("side must be 'left' or 'right'")
+            raise ValueError("side must be 'left', 'right' or 'home'")
         self.set(key, bool(saved))
 
     @property

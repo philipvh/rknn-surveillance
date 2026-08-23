@@ -332,8 +332,10 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
     sweepToggle.setAttribute('aria-checked', sw.enabled ? 'true' : 'false');
     var l = document.getElementById('setleft');
     var r = document.getElementById('setright');
+    var h = document.getElementById('sethome');
     if (l) l.innerHTML = sw.left_saved ? 'Left ✓' : 'Set Left';
     if (r) r.innerHTML = sw.right_saved ? 'Right ✓' : 'Set Right';
+    if (h) h.innerHTML = sw.home_saved ? 'Home ✓' : 'Set Home';
   }
   if (sweepToggle) {
     sweepToggle.addEventListener('click', function (e) {

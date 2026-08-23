@@ -1053,6 +1053,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                     "enabled": settings.sweep_enabled,
                     "left_saved": settings.sweep_left_saved,
                     "right_saved": settings.sweep_right_saved,
+                    "home_saved": settings.sweep_home_saved,
                     "ready": settings.sweep_ready,
                 }
             except Exception:
@@ -1159,6 +1160,8 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             ptz.add_preset(home)
         except Exception as e:
             return jsonify(ok=False, error=str(e)), 200
+        if settings is not None:
+            settings.mark_sweep_saved("home", True)
         return jsonify(ok=True, name=home)
 
     @app.route("/api/ptz/sweep/once", methods=["POST"])
