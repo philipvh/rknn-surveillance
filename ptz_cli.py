@@ -317,12 +317,16 @@ def main(argv=None):
     a.set_defaults(fn=cmd_addpreset)
 
     m = sub.add_parser("move")
-    m.add_argument("direction", choices=sorted(ptz_mod.DIRECTIONS))
+    # No fixed choices: which directions exist is the camera's business, and
+    # a custom backend may have its own. PTZ.move validates against the
+    # backend in use and names what it does accept.
+    m.add_argument("direction", metavar="DIRECTION",
+                   help="up, down, left, right (and diagonals on some cameras)")
     m.add_argument("--duration", type=float, default=1.0)
     m.set_defaults(fn=cmd_move)
 
     z = sub.add_parser("zoom")
-    z.add_argument("direction", choices=sorted(ptz_mod.ZOOMS))
+    z.add_argument("direction", metavar="DIRECTION", help="in or out")
     z.add_argument("--duration", type=float, default=0.5)
     z.set_defaults(fn=cmd_zoom)
 

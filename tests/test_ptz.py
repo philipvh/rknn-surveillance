@@ -286,17 +286,6 @@ class TestCommands(Base):
                              "rounds of traffic to the camera")
         self.assertTrue(any(r is True for r in results))
 
-    def test_nonzero_result_is_an_error(self):
-        p = self.ptz()
-        with self.assertRaises(PTZError) as e:
-            p._parse("ptzMoveLeft", b"<CGI_Result><result>-3</result></CGI_Result>")
-        self.assertIn("result=-3", str(e.exception))
-
-    def test_malformed_xml_still_yields_the_result(self):
-        p = self.ptz()
-        out = p._parse("x", b"junk<result>0</result>trailing")
-        self.assertEqual(out["result"], 0)
-
     def test_snapshot_returns_bytes(self):
         p = self.ptz()
         self.assertTrue(p.snapshot().startswith(b"\xff\xd8"))
@@ -485,36 +474,6 @@ class TestDisabledIsQuiet(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-
-class TestFoscamTimeParams(unittest.TestCase):
-    """The clock-sync arithmetic, where a sign error is a wrong timestamp on
-    every recording -- found only when the footage is needed."""
-
-    def test_offset_sign_is_inverted_for_foscam(self):
-        # Netherlands winter: +1h east of UTC -> Foscam timeZone -3600.
-        import datetime
-        p = ptz.foscam_time_params(datetime.datetime(2026, 1, 15, 8, 30, 0), 3600)
-        self.assertEqual(p["timeZone"], "-3600")
-
-    def test_summer_offset(self):
-        # Netherlands summer: +2h -> -7200. DST is carried by the offset.
-        import datetime
-        p = ptz.foscam_time_params(datetime.datetime(2026, 7, 15, 8, 30, 0), 7200)
-        self.assertEqual(p["timeZone"], "-7200")
-        self.assertEqual(p["isDst"], "0")   # never the camera's own DST flag
-
-    def test_carries_utc_not_local(self):
-        # The value handed over is UTC; the camera adds the offset itself.
-        import datetime
-        p = ptz.foscam_time_params(datetime.datetime(2026, 7, 15, 8, 47, 9), 7200)
-        self.assertEqual((p["hour"], p["minute"], p["sec"]), ("8", "47", "9"))
-        self.assertEqual(p["timeSource"], "1")
-
-    def test_negative_offset_west_of_utc(self):
-        import datetime
-        p = ptz.foscam_time_params(datetime.datetime(2026, 1, 1, 0, 0, 0), -18000)
-        self.assertEqual(p["timeZone"], "18000")   # UTC-5 -> +18000
 
 
 class TestSetTime(Base):

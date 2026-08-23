@@ -4,16 +4,21 @@
 # which is gitignored. Copy secrets.example.yaml to get started.
 
 camera:
+  # Which protocol to speak. Backends live in the camera/ package and each one
+  # supplies sensible defaults for its make, so most of the settings below can
+  # be left out entirely. `camera_backends` in the README explains how to add
+  # one; a driver of your own can live outside this repo and be named here as
+  # 'yourpackage.module:YourBackend'.
+  type: foscam
   host: 192.168.1.50
-  http_port: 88            # CGI/web port. Foscam ships on 88, not 80
-  # RTSP port, if it differs from the CGI port. Foscam serves RTSP on the HTTP
-  # port unless one is configured; most other cameras use 554. Omit to reuse
-  # http_port.
-  # rtsp_port: 554
   user: admin
-  # Stream paths as served by the SD2X (see the manual, section 3.4)
-  main_path: videoMain     # 1080p -- the footage you hand to someone
-  sub_path: videoSub       # low-res -- detection, and the long archive
+
+  # Everything below is optional: omit it and the backend's own default for
+  # this make is used. Set it only when your camera differs.
+  # http_port: 88          # CGI/web port. Foscam ships on 88, not 80
+  # rtsp_port: 554         # omit on Foscam -- it serves RTSP on the HTTP port
+  # main_path: videoMain   # the footage you hand to someone
+  # sub_path: videoSub     # low-res -- detection, and the long archive
 
 detection:
   source: sub              # which stream the NPU watches: sub | main

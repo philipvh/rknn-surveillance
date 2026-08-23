@@ -109,11 +109,79 @@ false alarms — see [the write-up](#the-write-up).
 | `controller.py` | the state machine; the only thing that moves the camera |
 | `capture.py` `concat_mgr.py` `annotated.py` | what is kept, and how clips are made |
 | `webapp.py` `templates/` | the panel and the media browser |
-| `ptz.py` `tracker.py` | camera control |
+| `ptz.py` `tracker.py` | camera control: deadlines, motor budget, watchdog |
+| `camera/` | one file per camera make -- the only place a vendor protocol lives |
 | `link.py` `uplink.py` `transports.py` `receiver.py` | the radio link |
 | `settings.py` `settings_cli.py` | panel-editable settings, and the shell rescue |
 | `doctor.py` | one command that says whether this install is healthy |
 | `setup_network.sh` `wan_ports.sh` `camera_ui.sh` | the camera segment, and reaching it over the tunnel |
+
+## Cameras
+
+The camera's protocol is isolated in `camera/`. Everything else -- the state
+machine, the panel, recording -- is written against one small interface, so a
+different camera is a subclass rather than a fork.
+
+```yaml
+camera:
+  type: foscam        # a backend in camera/, or yourpkg.module:YourBackend
+  host: 192.168.1.50
+  user: admin
+```
+
+Each backend supplies the defaults for its make (ports, stream paths), so a
+config usually carries only what differs.
+
+### Adding one
+
+```python
+from camera import Cap, CameraBackend, register
+
+class AxisBackend(CameraBackend):
+    name       = "axis"
+    HTTP_PORT  = 80
+    RTSP_PORT  = 554
+    MAIN_PATH  = "axis-media/media.amp"
+    SUB_PATH   = "axis-media/media.amp?resolution=640x480"
+    CAPABILITIES = {Cap.PRESETS, Cap.ZOOM, Cap.SNAPSHOT}
+
+    def start_move(self, direction): ...     # begin moving, return at once
+    def stop(self, kind=None, timeout=None): ...   # stop, or raise
+    # presets, zoom, snapshot, clock: implement what the camera has
+
+register(AxisBackend)
+```
+
+Three methods is a working camera. Everything else is optional and raises
+`NotSupported`, which callers use to hide a control rather than to show an
+error -- so a fixed camera with no presets degrades honestly instead of
+failing at runtime.
+
+### The rule worth knowing before you start
+
+**A backend starts and stops motion. It never decides when.**
+
+Deadlines, the motor budget, the retry-until-confirmed stop, the rescue stop
+at startup and the watchdog all live in `ptz.py`, above the interface, and
+apply to every backend equally. A backend that stopped itself -- "I'll move
+for two seconds" -- would be outside the watchdog, and a camera outside the
+watchdog is one that can be left grinding against its end stop when a process
+dies. `tests/test_camera.py::TestSomeoneElsesCamera` is the guard: a backend
+that has never heard of `ptz.py` still gets the watchdog and the budget, and
+that test failing means the abstraction has become a way to bypass the safety
+layer instead of a way to inherit it.
+
+`stop()` carries the one hard obligation: stop the camera or raise. Returning
+quietly when the camera did not hear you is the worst thing a backend can do,
+because the layer above treats a clean return as proof and stops retrying.
+
+### Capabilities, and being honest about them
+
+Cameras differ in ways callers care about. The shipped Foscam backend declares
+that it *cannot* report absolute position -- `getPTZAbsolutePos` and friends
+answer `result=-3` -- so anything wanting to draw a compass knows not to try.
+Declare what yours can do and let the rest raise.
+
 
 ## Tests
 

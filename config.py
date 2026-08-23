@@ -87,7 +87,28 @@ class Config:
 
     @property
     def camera_port(self) -> int:
-        return int(self._req("camera", "http_port"))
+        # Optional: the backend knows its make's default (Foscam ships on 88).
+        v = self._get("camera", "http_port", default=None)
+        return int(v) if v else int(self.backend_class.HTTP_PORT)
+
+    @property
+    def camera_password(self) -> str:
+        return self._password
+
+    @property
+    def camera_type(self) -> str:
+        """Which camera backend drives this install. See the camera package."""
+        return str(self._get("camera", "type", default="foscam"))
+
+    @property
+    def backend_class(self):
+        """The CameraBackend subclass for camera.type.
+
+        Imported lazily: config is imported by tools that never touch a
+        camera, and this keeps that cheap.
+        """
+        from camera.registry import backend_class
+        return backend_class(self.camera_type)
 
     @property
     def camera_user(self) -> str:
@@ -102,7 +123,12 @@ class Config:
         the INSTAR used for bench testing among them -- keep CGI on 80/443 and
         RTSP on 554. Defaults to the HTTP port so Foscam configs stay short.
         """
-        return int(self._get("camera", "rtsp_port", default=self.camera_port))
+        v = self._get("camera", "rtsp_port", default=None)
+        if v:
+            return int(v)
+        # A backend whose RTSP_PORT is None serves RTSP on its HTTP port,
+        # which is how Foscam does it; most other makes want 554.
+        return int(self.backend_class.RTSP_PORT or self.camera_port)
 
     def rtsp_url(self, stream: str = "main", redacted: bool = False) -> str:
         """RTSP URL for 'main' or 'sub'.
@@ -111,20 +137,16 @@ class Config:
         work without anyone hand-escaping them in a config file.
         """
         key = f"{stream}_path"
-        path = self._req("camera", key)
+        path = (self._get("camera", key, default=None)
+                or getattr(self.backend_class, f"{stream.upper()}_PATH", None))
+        if not path:
+            raise ConfigError(
+                f"camera.{key} is not set and the {self.camera_type} backend "
+                f"has no default for the {stream} stream")
         user = quote(self.camera_user, safe="")
         pw = REDACTED if redacted else quote(self._password, safe="")
         return (f"rtsp://{user}:{pw}@{self.camera_host}:{self.rtsp_port}/"
                 f"{str(path).lstrip('/')}")
-
-    def cgi_url(self, redacted: bool = False) -> str:
-        return f"http://{self.camera_host}:{self.camera_port}/cgi-bin/CGIProxy.fcgi"
-
-    def cgi_params(self, cmd: str, redacted: bool = False, **extra) -> dict:
-        p = {"cmd": cmd, "usr": self.camera_user,
-             "pwd": REDACTED if redacted else self._password}
-        p.update(extra)
-        return p
 
     # ------------------------------------------------------------- detection
     @property

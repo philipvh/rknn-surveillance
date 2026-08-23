@@ -12,13 +12,16 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 
-"""PTZ control for the Foscam SD2X, with the safety properties attached.
+"""PTZ control with the safety properties attached.
 
-Every movement command this camera accepts is *continuous*: it runs until
-something stops it. That single fact drives the whole design here. If the
-process that sent ptzMoveLeft dies, or the wall panel's wifi drops with a
-finger on the button, the camera keeps turning until it grinds against its
-mechanical limit. So:
+Vendor-neutral: the camera's own protocol lives in the camera package, and
+this module is what makes any of them safe to drive.
+
+Movement on these cameras is *continuous*: a command runs until something
+stops it. That single fact drives the whole design here. If the process that
+started a move dies, or the wall panel's wifi drops with a finger on the
+button, the camera keeps turning until it grinds against its mechanical
+limit. So:
 
   * No move is ever issued without a deadline. A watchdog thread stops the
     camera when the deadline passes, and the caller must keep refreshing it
@@ -31,74 +34,38 @@ mechanical limit. So:
   * A rolling motor-second budget refuses movement that would run the motors
     harder than the manual's own advice against long cruises allows.
 
-The transport is injectable so all of the above can be tested without a camera.
+The backend and its transport are both injectable, so all of the above can be
+tested without a camera -- and so a new camera inherits every guarantee above
+by implementing three methods rather than by being careful.
 """
 
 from collections import deque
 from dataclasses import dataclass
-from urllib.parse import urlencode
 import atexit
 import logging
-import re
 import signal
 import threading
 import time
-import urllib.error
-import urllib.request
-import xml.etree.ElementTree as ET
+
+# Cap is re-exported: callers ask ptz.supports(Cap.PRESETS) and should not
+# need to know which module the flags live in.
+from camera.base import Cap, CameraError, NotSupported, UrllibTransport  # noqa: F401
+from camera.registry import make_backend
 
 log = logging.getLogger("ptz")
 
-DIRECTIONS = {
-    "up": "ptzMoveUp", "down": "ptzMoveDown",
-    "left": "ptzMoveLeft", "right": "ptzMoveRight",
-    "topleft": "ptzMoveTopLeft", "topright": "ptzMoveTopRight",
-    "bottomleft": "ptzMoveBottomLeft", "bottomright": "ptzMoveBottomRight",
-}
-ZOOMS = {"in": "zoomIn", "out": "zoomOut"}
-
-STOP_CMD = "ptzStopRun"
-ZOOM_STOP_CMD = "zoomStop"
-
-
-def foscam_time_params(utc, offset_seconds):
-    """Build setSystemTime arguments for a UTC instant and a local offset.
-
-    The camera treats the value it is given as UTC and then adds its timeZone
-    for display -- and Foscam's timeZone has the opposite sign to everyone
-    else's, so GMT+1 is -3600, not +3600. Both quirks are confined to this one
-    function: give it a UTC datetime and the real offset east of UTC in
-    seconds (positive for the Netherlands), and it returns the right dict.
-    isDst is left 0 on purpose -- the offset already carries summer time, and
-    this firmware's own DST flag does nothing.
-    """
-    return {
-        "timeSource": "1",              # manual: we are the time source
-        "timeZone": str(-int(offset_seconds)),
-        "isDst": "0",
-        "year": str(utc.year), "mon": str(utc.month), "day": str(utc.day),
-        "hour": str(utc.hour), "minute": str(utc.minute), "sec": str(utc.second),
-    }
-
-
-class PTZError(Exception):
-    pass
+# The vendor's protocol lives in the camera package. This module is the safety
+# layer above it: deadlines, the motor budget, retry-until-confirmed stops and
+# the watchdog. It knows no command names at all, which is what lets a second
+# camera be a subclass rather than a fork.
+#
+# PTZError is what this module has always raised, and a backend failure is one
+# of those, so the two are the same class rather than a translation layer.
+PTZError = CameraError
 
 
 class BudgetExceeded(PTZError):
     pass
-
-
-# --------------------------------------------------------------------- transport
-
-class UrllibTransport:
-    """Stdlib only -- one less package to install on the board."""
-
-    def get(self, url, params, timeout):
-        full = f"{url}?{urlencode(params)}"
-        req = urllib.request.Request(full, headers={"User-Agent": "rknn-ptz/1"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.read()
 
 
 # ----------------------------------------------------------------------- budget
@@ -184,21 +151,24 @@ class MotorBudget:
 
 class PTZ:
     def __init__(self, cfg, transport=None, clock=time.monotonic,
-                 install_signal_handlers=True, stop_on_start=True):
+                 install_signal_handlers=True, stop_on_start=True,
+                 backend=None):
         self.cfg = cfg
         self.p = (cfg._get("ptz", default={}) or {})
         http = self.p.get("http", {}) or {}
-        # A camera that is not there, or not a Foscam, must not be commanded.
-        # Without this the watchdog retries a stop against an unreachable
-        # host forever and floods the log.
+        # A camera that is not there must not be commanded. Without this the
+        # watchdog retries a stop against an unreachable host forever and
+        # floods the log.
         self.enabled = bool(self.p.get("enabled", True))
 
-        self.url = cfg.cgi_url()
-        self._params_for = cfg.cgi_params
         self.transport = transport or UrllibTransport()
         self._clock = clock
 
         self.timeout = float(http.get("timeout_s", 5.0))
+        # The camera's own protocol, chosen by camera.type. Everything below
+        # this line is vendor-neutral; everything vendor-specific is in there.
+        self.backend = backend or make_backend(
+            cfg, transport=self.transport, timeout=self.timeout)
         self.stop_timeout = float(http.get("stop_timeout_s", 3.0))
         self.stop_retries = int(http.get("stop_retries", 5))
         # Base for the exponential backoff between failed stop sequences.
@@ -318,52 +288,33 @@ class PTZ:
         """
         return self.since_last_move() >= float(self.p.get("settle_s", 0.5))
 
-    # ------------------------------------------------------------ transport
-    def _call(self, cmd, timeout=None, **extra):
+    # -------------------------------------------------------------- backend
+    def _cam(self):
+        """The backend, or a refusal if PTZ is switched off.
+
+        A camera that is not there, or deliberately disabled, must not be
+        commanded: without this the watchdog would retry a stop against an
+        unreachable host for ever and fill the log.
+        """
         if not self.enabled:
             raise PTZError("PTZ is disabled in config")
-        params = self._params_for(cmd, **extra)
-        try:
-            body = self.transport.get(self.url, params, timeout or self.timeout)
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
-            raise PTZError(f"{cmd}: {e}") from e
-        return self._parse(cmd, body)
+        return self.backend
 
-    @staticmethod
-    def _parse(cmd, body):
-        if isinstance(body, bytes):
-            try:
-                text = body.decode("utf-8", "replace")
-            except Exception:
-                text = ""
-        else:
-            text = body or ""
-        if not text.strip():
-            return {"result": None, "_raw": text}
-        out = {}
-        try:
-            root = ET.fromstring(text)
-            for child in root:
-                out[child.tag] = (child.text or "").strip()
-        except ET.ParseError:
-            # Foscam is not always strict about its XML; fall back to scraping.
-            for m in re.finditer(r"<(\w+)>([^<]*)</\1>", text):
-                out[m.group(1)] = m.group(2).strip()
-            if not out:
-                raise PTZError(f"{cmd}: unparseable response {text[:120]!r}")
-        if "result" in out:
-            try:
-                res = int(out["result"])
-            except ValueError:
-                res = None
-            out["result"] = res
-            if res not in (0, None):
-                raise PTZError(f"{cmd}: camera returned result={res}")
-        out["_raw"] = text
-        return out
+    def _call(self, cmd, timeout=None, **extra):
+        """Raw vendor command, for probing tools only.
+
+        Not used by anything in this module -- it exists so ptz_cli can ask a
+        camera what it supports. Backends that do not expose a raw call say so
+        rather than pretending.
+        """
+        cam = self._cam()
+        if not hasattr(cam, "call"):
+            raise NotSupported(
+                f"the {cam.name} backend has no raw command interface")
+        return cam.call(cmd, timeout=timeout, **extra)
 
     # ---------------------------------------------------------------- moving
-    def _begin_move(self, cmd, kind, source, deadline_s):
+    def _begin_move(self, kind, direction, source, deadline_s):
         with self._lock:
             self._moving = True
             self._move_kind = kind
@@ -372,7 +323,11 @@ class PTZ:
             self._deadline = self._clock() + deadline_s
             self._stopped = False
             self.moves += 1
-        self._call(cmd)
+        cam = self._cam()
+        if kind == "zoom":
+            cam.start_zoom(direction)
+        else:
+            cam.start_move(direction)
 
     def move(self, direction, source="auto", deadline_s=None):
         """Start (or extend) a continuous move.
@@ -386,9 +341,9 @@ class PTZ:
         that will not stop is a more urgent problem than a spent budget.
         """
         direction = direction.lower()
-        if direction not in DIRECTIONS:
+        if direction not in self.backend.DIRECTIONS:
             raise PTZError(f"unknown direction {direction!r}; "
-                           f"expected one of {sorted(DIRECTIONS)}")
+                           f"expected one of {sorted(self.backend.DIRECTIONS)}")
         deadline_s = self.move_deadline_s if deadline_s is None else deadline_s
 
         with self._lock:
@@ -413,13 +368,13 @@ class PTZ:
             self.budget.record(deadline_s, source=source)
             return
 
-        self._begin_move(DIRECTIONS[direction], "ptz", source, deadline_s)
+        self._begin_move("ptz", direction, source, deadline_s)
         self.budget.record(deadline_s, source=source)
         log.info("move %s (%s), deadline %.1fs", direction, source, deadline_s)
 
     def zoom(self, direction, source="manual", deadline_s=None):
         direction = direction.lower()
-        if direction not in ZOOMS:
+        if direction not in self.backend.ZOOMS:
             raise PTZError(f"unknown zoom {direction!r}; expected in or out")
         deadline_s = self.move_deadline_s if deadline_s is None else deadline_s
         decision = self.budget.check(deadline_s, source=source)
@@ -431,7 +386,7 @@ class PTZ:
             with self._lock:
                 self._deadline = self._clock() + deadline_s
         else:
-            self._begin_move(ZOOMS[direction], "zoom", source, deadline_s)
+            self._begin_move("zoom", direction, source, deadline_s)
         self.budget.record(deadline_s, source=source)
 
     def stop(self, reason=""):
@@ -453,8 +408,6 @@ class PTZ:
             self._deadline = 0.0
             self._stop_pending = True
 
-        cmds = [STOP_CMD] if kind != "zoom" else [ZOOM_STOP_CMD, STOP_CMD]
-
         if not self._stop_lock.acquire(timeout=0.05):
             # Another thread is already pursuing a stop. _stop_pending stays
             # set so it will keep going until the camera confirms; a second
@@ -467,16 +420,15 @@ class PTZ:
                     # Someone else already stopped it and nothing has moved
                     # since. Re-sending would be pure noise.
                     return True
-            return self._stop_loop(cmds, reason)
+            return self._stop_loop(kind, reason)
         finally:
             self._stop_lock.release()
 
-    def _stop_loop(self, cmds, reason):
+    def _stop_loop(self, kind, reason):
         last_err = None
         for attempt in range(1, self.stop_retries + 1):
             try:
-                for c in cmds:
-                    self._call(c, timeout=self.stop_timeout)
+                self._cam().stop(kind, timeout=self.stop_timeout)
                 with self._lock:
                     self._stop_pending = False
                     self._stopped = True
@@ -536,19 +488,14 @@ class PTZ:
 
     # --------------------------------------------------------------- presets
     def list_presets(self):
-        out = self._call("getPTZPresetPointList")
-        names = []
-        for k, v in out.items():
-            if re.fullmatch(r"point\d+", k) and v:
-                names.append((int(k[5:]), v))
-        return [v for _, v in sorted(names)]
+        return self._cam().list_presets()
 
     def goto_preset(self, name, source="auto", is_scan_start=False):
         decision = self.budget.check(self.preset_estimate_s, source=source,
                                      is_scan_start=is_scan_start)
         if not decision.allowed:
             raise BudgetExceeded(decision.reason)
-        self._call("ptzGotoPresetPoint", name=name)
+        self._cam().goto_preset(name)
         self.budget.record(self.preset_estimate_s, source=source,
                            is_scan_start=is_scan_start)
         with self._lock:
@@ -558,38 +505,34 @@ class PTZ:
         log.info("goto preset %r (%s)", name, source)
 
     def delete_preset(self, name):
-        return self._call("ptzDeletePresetPoint", name=name)
+        return self._cam().delete_preset(name)
 
     def add_preset(self, name):
-        # ptzAddPresetPoint will NOT overwrite an existing name: the camera
-        # returns success but keeps the original position, so re-aiming a preset
-        # from the panel silently does nothing -- which is exactly how "Set
-        # Home" appeared broken. Delete first (ignoring "not there"), then add,
-        # so saving a preset always stores the current view.
-        try:
-            self.delete_preset(name)
-        except PTZError:
-            pass
-        return self._call("ptzAddPresetPoint", name=name)
+        """Save the current view under `name`, replacing any existing one.
+
+        Overwriting is the backend's contract; how it is achieved is the
+        backend's problem (the Foscam one has to delete first, because its own
+        add silently refuses to replace).
+        """
+        return self._cam().save_preset(name)
 
     def go_home(self, source="auto"):
         return self.goto_preset(self.p.get("home_preset", "Home"), source=source)
 
     # ----------------------------------------------------------------- misc
     def set_speed(self, level):
-        return self._call("setPTZSpeed", speed=int(level))
+        return self._cam().set_speed(level)
 
     def set_time(self, when_utc=None, offset_seconds=None):
         """Push the clock to the camera, correct for the season.
 
-        This camera cannot be left to keep its own time. It is on the isolated
-        segment with no path to an NTP server, so its clock free-runs; and its
-        firmware ignores the isDst flag, so even with time it would not follow
-        summer time. Both are fixed here by not trusting the camera with any of
-        it: the board -- which does have NTP and does handle DST -- hands over
-        UTC plus the offset that is correct right now, and the camera only has
-        to add them. Run periodically, because a free-running clock drifts and
-        because the offset changes twice a year.
+        A camera on the isolated segment has no path to an NTP server, so its
+        clock free-runs; and a camera may ignore its own DST flag, as the
+        Foscam does. Both are handled by not trusting the camera with any of
+        it: the board -- which has NTP and handles DST -- hands over UTC plus
+        the offset that is correct right now, and the camera only has to store
+        them. Run periodically, because a free-running clock drifts and because
+        the offset changes twice a year.
 
         The wrong time on a vandalism clip is not a cosmetic problem: it is the
         difference between footage that corroborates an account and footage a
@@ -603,22 +546,25 @@ class PTZ:
             # The offset in effect at this instant, DST and all, from the OS.
             offset_seconds = (-_t.timezone if _t.localtime().tm_isdst <= 0
                               else -_t.altzone)
-        return self._call("setSystemTime",
-                          **foscam_time_params(when_utc, offset_seconds))
+        return self._cam().set_clock(when_utc, offset_seconds)
 
     def dev_state(self):
-        return self._call("getDevState")
+        return self._cam().device_state()
 
     def dev_info(self):
-        return self._call("getDevInfo")
+        return self._cam().device_info()
 
     def snapshot(self):
-        """Raw JPEG bytes. Used as the wall panel's last-resort live view."""
-        params = self._params_for("snapPicture2")
-        try:
-            return self.transport.get(self.url, params, self.timeout)
-        except (urllib.error.URLError, OSError, TimeoutError) as e:
-            raise PTZError(f"snapPicture2: {e}") from e
+        """Raw JPEG bytes. Used as the wall panel's near-live aiming view."""
+        return self._cam().snapshot()
+
+    def supports(self, cap):
+        """Whether the camera in use can do something at all.
+
+        Lets callers hide a control rather than offer one that will always
+        fail -- this camera reports no absolute position, for instance.
+        """
+        return self.backend.supports(cap)
 
     def status(self):
         with self._lock:
