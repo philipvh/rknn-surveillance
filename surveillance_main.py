@@ -359,7 +359,8 @@ def main(argv=None):
                             mark_open_fn=mark_incident_open,
                             mark_done_fn=mark_incident_done,
                             tracker=tracker, announcer=announcer,
-                            annotated=annotated, capture=capture)
+                            annotated=annotated, capture=capture,
+                            settings=user_settings)
 
     trigger = trigger_mod.TriggerInput(cfg, on_event=controller.on_pir)
     trigger.start()

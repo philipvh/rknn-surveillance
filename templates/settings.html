@@ -651,6 +651,39 @@ trigger a recording</b>. The camera keeps watching and keeps nothing.</div>
 </form>
 {% endif %}
 
+  {% if editable %}
+  <h2 class="sweep-h">Trigger sweep</h2>
+  {% if sys_msg %}<div class="note ok">{{ sys_msg }}</div>{% endif %}
+  {% if sys_err %}<div class="note err">{{ sys_err }}</div>{% endif %}
+  <p style="color:#8fa39a;font-size:13px">
+    When triggered, the camera can swing between two saved views to cover a
+    scene wider than one shot. Aim with the D-pad and save the ends with
+    <b style="color:#8fa39a">Set&nbsp;Left</b> / <b style="color:#8fa39a">Set&nbsp;Right</b>
+    on the panel; there are no angles to type because this camera does not
+    report them.
+  </p>
+  <form method="post" action="{{ url_for('settings_sweep') }}">
+    <label style="display:block;margin:8px 0">
+      <input type="checkbox" name="sweep_enabled"
+             {% if sweep_enabled %}checked{% endif %}>
+      Sweep when triggered
+    </label>
+    <label style="display:block;margin:8px 0">
+      Dwell at each end
+      <input type="number" name="sweep_dwell" min="0.5" max="60" step="0.5"
+             value="{{ '%.1f'|format(sweep_dwell) }}"
+             style="width:6em"> seconds
+    </label>
+    <p style="color:#6d8378;font-size:13px">
+      Left endpoint: <b style="color:#8fa39a">{{ 'set' if sweep_left_saved else 'not set' }}</b>,
+      right endpoint: <b style="color:#8fa39a">{{ 'set' if sweep_right_saved else 'not set' }}</b>.
+      {% if not (sweep_left_saved and sweep_right_saved) %}
+      Set both from the panel before enabling.{% endif %}
+    </p>
+    <button type="submit">Save</button>
+  </form>
+  {% endif %}
+
 {% endif %}
 
 <script>

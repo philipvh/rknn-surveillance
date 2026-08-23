@@ -148,6 +148,16 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
         <button data-zoom="in">ZOOM +</button>
         <button data-zoom="out">ZOOM &minus;</button>
       </div>
+      <h3>Trigger sweep</h3>
+      <div class="swrow">
+        <span class="swlabel">Sweep when triggered</span>
+        <button id="sweeptoggle" class="sw" role="switch" aria-checked="false"
+                title="on a trigger, oscillate between the two saved views"><span class="knob"></span></button>
+      </div>
+      <div class="row">
+        <button class="small" id="setleft" title="aim left, then save this view">Set Left</button>
+        <button class="small" id="setright" title="aim right, then save this view">Set Right</button>
+      </div>
       <h3>Presets</h3>
       <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
       {% for p in presets %}{% if p != home %}
@@ -298,6 +308,43 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
     })(els[i]);
   }
 
+  /* ---- trigger sweep -------------------------------------------------- */
+  var sweepToggle = document.getElementById('sweeptoggle');
+  function updateSweep(sw) {
+    if (!sweepToggle || !sw) return;
+    sweepToggle.className = 'sw' + (sw.enabled ? ' on' : '');
+    sweepToggle.setAttribute('aria-checked', sw.enabled ? 'true' : 'false');
+    var l = document.getElementById('setleft');
+    var r = document.getElementById('setright');
+    if (l) l.innerHTML = sw.left_saved ? 'Left ✓' : 'Set Left';
+    if (r) r.innerHTML = sw.right_saved ? 'Right ✓' : 'Set Right';
+  }
+  if (sweepToggle) {
+    sweepToggle.addEventListener('click', function (e) {
+      e.preventDefault();
+      var on = sweepToggle.getAttribute('aria-checked') !== 'true';
+      post('/api/ptz/sweep', 'enabled=' + (on ? '1' : '0'), function (r) {
+        if (r && r.ok) {
+          if (r.enabled && !r.ready) say('Set Left and Right first.');
+          refresh();
+        } else { handle(r); }
+      });
+    }, false);
+  }
+  function bindSweepSet(id, dir) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', function (e) {
+      e.preventDefault();
+      post('/api/ptz/sweep/set', 'dir=' + dir, function (r) {
+        if (r && r.ok) { say('Saved the ' + dir + ' sweep point.'); refresh(); }
+        else { handle(r); }
+      });
+    }, false);
+  }
+  bindSweepSet('setleft', 'left');
+  bindSweepSet('setright', 'right');
+
   /* anything that means the page is going away must release the motors */
   function panic() { stopMove(true); }
   window.addEventListener('blur', panic, false);
@@ -346,6 +393,7 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       var a = document.getElementById('arm');
       a.innerHTML = s.armed ? 'Armed' : 'Disarmed';
       a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
+      if (s.sweep) updateSweep(s.sweep);
     };
     x.send();
   }

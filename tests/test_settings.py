@@ -385,3 +385,38 @@ class TestNoticingOutsideEdits(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestSweepSettings(Base):
+    def test_defaults_off_and_unset(self):
+        s = self.store()
+        self.assertFalse(s.sweep_enabled)
+        self.assertFalse(s.sweep_ready)
+        self.assertEqual(s.sweep_dwell_s, 4.0)
+
+    def test_ready_needs_both_ends(self):
+        s = self.store()
+        s.mark_sweep_saved("left")
+        self.assertFalse(s.sweep_ready)
+        s.mark_sweep_saved("right")
+        self.assertTrue(s.sweep_ready)
+
+    def test_dwell_is_clamped(self):
+        s = self.store()
+        s.set_sweep_dwell_s(0.1)
+        self.assertGreaterEqual(s.sweep_dwell_s, 0.5)
+        s.set_sweep_dwell_s(999)
+        self.assertLessEqual(s.sweep_dwell_s, 60.0)
+
+    def test_bad_side_raises(self):
+        with self.assertRaises(ValueError):
+            self.store().mark_sweep_saved("sideways")
+
+    def test_persists_across_reload(self):
+        s = self.store()
+        s.set_sweep_enabled(True)
+        s.mark_sweep_saved("left")
+        s.mark_sweep_saved("right")
+        again = self.store()          # fresh instance, same file
+        self.assertTrue(again.sweep_enabled)
+        self.assertTrue(again.sweep_ready)

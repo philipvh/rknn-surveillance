@@ -657,3 +657,99 @@ class TestAnInterruptedIncident(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class FakeSweepSettings:
+    """The slice of Settings the controller reads for the trigger-sweep."""
+    def __init__(self, enabled=True, left=True, right=True, dwell=4.0):
+        self.sweep_enabled = enabled
+        self._left = left
+        self._right = right
+        self.sweep_dwell_s = dwell
+
+    @property
+    def sweep_ready(self):
+        return self._left and self._right
+
+
+class TestTriggerSweep(unittest.TestCase):
+    """When configured, a trigger makes the camera oscillate between two saved
+    endpoints, covering a scene wider than one view, and comes home when quiet.
+    """
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.now = 1000.0
+        self.wall = ARMED_NIGHT
+        # No scan_presets: a sweep-only install, which is the real board.
+        self.cfg = Cfg(ptz={"scan_presets": [], "home_preset": "Home",
+                            "dwell_s": 4.0, "settle_s": 0.5})
+        self.ptz = FakePTZ()
+        self.sched = Schedule.from_config({"armed": [
+            {"days": "all", "from": "22:00", "to": "08:00"}]})
+        self.policy = AlertPolicy(self.cfg, self.sched, clock=lambda: self.wall)
+        self.shadow = ShadowLog(Path(self.tmp.name) / "shadow")
+        self.settings = FakeSweepSettings()
+        self.c = Controller(
+            self.cfg, self.ptz, self.sched, self.policy, self.shadow,
+            clip_fn=lambda s, e: "c.mp4", snapshot_fn=lambda: "snap.jpg",
+            settings=self.settings, clock=lambda: self.now,
+            wall=lambda: self.wall)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def advance(self, seconds, step=0.1):
+        end = self.now + seconds
+        while self.now < end:
+            self.now = round(self.now + step, 4)
+            self.wall = self.wall + dt.timedelta(seconds=step)
+            self.c.tick()
+
+    def see(self):
+        self.c.on_detection(Detection(self.wall, 1, 0.9, ["person"]))
+
+    def test_detection_starts_a_sweep_not_a_hold(self):
+        self.see()
+        self.assertIs(self.c.state, State.SWEEPING)
+
+    def test_oscillates_between_the_two_endpoints(self):
+        self.see()
+        # keep the scene "busy" so the sweep continues
+        for _ in range(30):
+            self.see()
+            self.advance(1.0)
+        seq = [g for g in self.ptz.gotos if g in ("SweepLeft", "SweepRight")]
+        self.assertGreaterEqual(len(seq), 3)
+        self.assertEqual(seq[0], "SweepLeft")
+        # it must actually alternate, not sit on one side
+        self.assertIn("SweepRight", seq)
+        for a, b in zip(seq, seq[1:]):
+            self.assertNotEqual(a, b, "sweep repeated the same endpoint")
+
+    def test_returns_home_when_the_scene_goes_quiet(self):
+        self.see()
+        self.advance(2.0)
+        self.assertIs(self.c.state, State.SWEEPING)
+        # no more sightings; after the quiet period it should give up and home
+        self.advance(20.0)
+        self.assertIn(self.c.state, (State.RETURNING, State.PARKED))
+        self.assertIn("Home", self.ptz.gotos)
+
+    def test_disabled_falls_back_to_normal_behaviour(self):
+        self.settings.sweep_enabled = False
+        self.see()
+        self.assertIsNot(self.c.state, State.SWEEPING)
+
+    def test_not_ready_does_not_sweep(self):
+        # enabled but only one endpoint saved
+        self.settings._right = False
+        self.see()
+        self.assertIsNot(self.c.state, State.SWEEPING)
+        self.assertNotIn("SweepLeft", self.ptz.gotos)
+
+    def test_budget_refusal_ends_the_sweep(self):
+        self.ptz.refuse = True
+        self.see()
+        self.advance(2.0)
+        # a refused move must not leave it wedged in SWEEPING
+        self.assertIn(self.c.state, (State.RETURNING, State.PARKED))

@@ -1195,3 +1195,73 @@ class TestEveryPageIsValidHtml(Base):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestTriggerSweepEndpoints(Base):
+    """Saving sweep endpoints from the panel and toggling the behaviour."""
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json")
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def test_set_left_saves_a_preset_and_records_it(self):
+        r = self.c.post("/api/ptz/sweep/set", data={"dir": "left"},
+                        headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertTrue(self.store.sweep_left_saved)
+        self.assertIn("ptzAddPresetPoint", self.cam.calls)
+
+    def test_ready_only_after_both_ends(self):
+        self.c.post("/api/ptz/sweep/set", data={"dir": "left"},
+                    headers=self.auth())
+        self.assertFalse(self.store.sweep_ready)
+        self.c.post("/api/ptz/sweep/set", data={"dir": "right"},
+                    headers=self.auth())
+        self.assertTrue(self.store.sweep_ready)
+
+    def test_bad_side_is_rejected_without_saving(self):
+        r = self.c.post("/api/ptz/sweep/set", data={"dir": "up"},
+                        headers=self.auth())
+        self.assertFalse(r.get_json()["ok"])
+        self.assertFalse(self.store.sweep_left_saved)
+
+    def test_toggle_on_and_off(self):
+        self.c.post("/api/ptz/sweep", data={"enabled": "1"},
+                    headers=self.auth())
+        self.assertTrue(self.store.sweep_enabled)
+        self.c.post("/api/ptz/sweep", data={"enabled": "0"},
+                    headers=self.auth())
+        self.assertFalse(self.store.sweep_enabled)
+
+    def test_settings_screen_saves_dwell_and_enable(self):
+        r = self.c.post("/settings/sweep",
+                        data={"sweep_enabled": "on", "sweep_dwell": "7.5"},
+                        headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(self.store.sweep_enabled)
+        self.assertEqual(self.store.sweep_dwell_s, 7.5)
+
+    def test_settings_screen_rejects_a_bad_dwell(self):
+        r = self.c.post("/settings/sweep",
+                        data={"sweep_enabled": "on", "sweep_dwell": "soon"},
+                        headers=self.auth())
+        self.assertIn(b"must be a number", r.data)
+
+    def test_settings_page_shows_the_sweep_section(self):
+        body = self.c.get("/settings", headers=self.auth()).data
+        self.assertIn(b"Trigger sweep", body)
+        self.assertIn(b"Sweep when triggered", body)
+
+    def test_status_reports_sweep_state(self):
+        self.c.post("/api/ptz/sweep/set", data={"dir": "left"},
+                    headers=self.auth())
+        s = self.c.get("/api/status", headers=self.auth()).get_json()
+        self.assertIn("sweep", s)
+        self.assertTrue(s["sweep"]["left_saved"])
+        self.assertFalse(s["sweep"]["right_saved"])

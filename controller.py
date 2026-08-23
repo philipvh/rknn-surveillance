@@ -46,9 +46,16 @@ class State(enum.Enum):
     PARKED = "parked"
     SETTLING = "settling"
     SCANNING = "scanning"
+    SWEEPING = "sweeping"
     HOLDING = "holding"
     RETURNING = "returning"
     MANUAL = "manual"
+
+
+# The two endpoints of a trigger-sweep, saved as camera presets from the panel.
+# Named, not angled, because this camera reports no absolute position.
+SWEEP_LEFT_PRESET = "SweepLeft"
+SWEEP_RIGHT_PRESET = "SweepRight"
 
 
 class Detection:
@@ -65,10 +72,14 @@ class Controller:
     def __init__(self, cfg, ptz, schedule, policy, shadow_log,
                  clip_fn=None, snapshot_fn=None, tracker=None, announcer=None,
                  mark_open_fn=None, mark_done_fn=None,
-                 annotated=None, capture=None,
+                 annotated=None, capture=None, settings=None,
                  clock=None, wall=None):
         self.cfg = cfg
         self.ptz = ptz
+        # Panel-editable settings (may be None in tests / a bare install). The
+        # trigger-sweep reads its toggle, dwell and endpoint state from here so
+        # it can be turned on at the wall without a restart.
+        self.settings = settings
         self.schedule = schedule
         self.policy = policy
         self.shadow = shadow_log
@@ -115,6 +126,7 @@ class Controller:
         self._deadline = None
 
         self._preset_index = 0
+        self._sweep_index = 0
         self._pir_active = False
         self._pir_last_release = None
         self._pir_last_duration = 0.0
@@ -252,7 +264,21 @@ class Controller:
             if self._pir_recent():
                 inc.pir_corroborated = True
 
-        if self._state in (State.SCANNING, State.SETTLING, State.PARKED):
+        if self.sweep_ready():
+            # With a sweep configured, a sighting drives the sweep rather than a
+            # lock-on: the scene is wider than the view, so covering both halves
+            # matters more than centring this one. The window is already
+            # extended above; here we only start the sweep, once.
+            if self._state in (State.PARKED, State.SETTLING, State.SCANNING):
+                self._sweep_index = 0
+                self._deadline = None
+                self._go(State.SWEEPING, "sweep on trigger")
+                if self.announcer is not None:
+                    try:
+                        self.announcer.maybe_announce(self._incident)
+                    except Exception:
+                        log.exception("announcement failed")
+        elif self._state in (State.SCANNING, State.SETTLING, State.PARKED):
             self._go(State.HOLDING, "person in view")
             # Rung three of the deterrence ladder, once per incident: the
             # camera has already turned to face them by getting here.
@@ -282,6 +308,9 @@ class Controller:
     def _current_preset(self):
         if self._state is State.SCANNING and self.presets:
             return self.presets[(self._preset_index - 1) % len(self.presets)]
+        if self._state is State.SWEEPING:
+            presets = [SWEEP_LEFT_PRESET, SWEEP_RIGHT_PRESET]
+            return presets[(self._sweep_index - 1) % len(presets)]
         if self._state in (State.PARKED, State.SETTLING):
             return self.home
         return ""
@@ -295,7 +324,7 @@ class Controller:
                 handler()
             except (PTZError, BudgetExceeded) as e:
                 log.warning("%s in %s: %s", type(e).__name__, st.value, e)
-                if st in (State.SCANNING, State.SETTLING):
+                if st in (State.SCANNING, State.SETTLING, State.SWEEPING):
                     self._go(State.RETURNING, f"{type(e).__name__}")
 
     def _tick_parked(self):
@@ -313,6 +342,24 @@ class Controller:
         if (self._clock() - last) >= self.quiet_period_s:
             self._close_incident("no trigger for the quiet period")
 
+    # ------------------------------------------------------------------ sweep
+    def sweep_ready(self):
+        """Sweep-on-trigger is on, has both endpoints, and the dome can move."""
+        s = self.settings
+        if s is None or not getattr(self.ptz, "enabled", True):
+            return False
+        try:
+            return bool(s.sweep_enabled) and bool(s.sweep_ready)
+        except Exception:
+            return False
+
+    def _sweep_dwell(self):
+        s = self.settings
+        try:
+            return float(s.sweep_dwell_s) if s is not None else self.dwell_s
+        except Exception:
+            return self.dwell_s
+
     def _tick_settling(self):
         # Let the floodlights come up and the camera's exposure catch up.
         if self._elapsed() < self.lights_settle_s:
@@ -320,11 +367,53 @@ class Controller:
         if self.pir_required_to_scan and not self._pir_active:
             self._go(State.PARKED, "PIR released before the scan began")
             return
+        # A trigger-sweep covers a scene wider than one view by oscillating
+        # between two saved positions for as long as the trigger persists. It
+        # takes precedence over both the preset patrol and the fixed-camera
+        # hold: it is the deliberate answer to "the camera cannot see it all".
+        if self.sweep_ready():
+            self._sweep_index = 0
+            self._deadline = None
+            self._go(State.SWEEPING, "sweep on trigger")
+            return
         if not self.can_move:
             self._go(State.HOLDING, "camera is fixed; watching the view it has")
             return
         self._preset_index = 0
         self._go(State.SCANNING, "lights up")
+
+    def _tick_sweeping(self):
+        # Oscillate between the two endpoints, dwelling at each so the detector
+        # sees a still frame. Ends when the scene has been quiet for the quiet
+        # period -- the same terminator as an incident -- or on the hold cap as
+        # a backstop, so a permanently busy scene cannot sweep the motors for
+        # ever.
+        if not self.sweep_ready():
+            self._go(State.RETURNING, "sweep turned off")
+            return
+        if self._elapsed() > self.max_hold_s:
+            self._go(State.RETURNING, "sweep reached its time cap")
+            return
+        last = self._last_trigger_at
+        if last is not None and (self._clock() - last) >= self.quiet_period_s \
+                and not self._pir_active:
+            self._go(State.RETURNING, "scene quiet, ending sweep")
+            return
+        if self._deadline is None:
+            presets = [SWEEP_LEFT_PRESET, SWEEP_RIGHT_PRESET]
+            name = presets[self._sweep_index % len(presets)]
+            self._sweep_index += 1
+            try:
+                self.ptz.goto_preset(name, source="auto",
+                                     is_scan_start=(self._sweep_index == 1))
+            except BudgetExceeded as e:
+                self._go(State.RETURNING, f"motor budget: {e}")
+                return
+            self._deadline = (self._clock() + self._sweep_dwell()
+                              + self.ptz.preset_estimate_s)
+            return
+        if self._clock() >= self._deadline:
+            self._deadline = None
 
     def _tick_scanning(self):
         if not self.can_move:
@@ -367,7 +456,10 @@ class Controller:
             self._go(State.RETURNING, "no trigger for the quiet period")
 
     def _tick_returning(self):
-        if not self.can_move:
+        # A sweep uses its own endpoints, not scan_presets, so can_move can be
+        # False on a sweep-only install; it must still be able to come home
+        # afterwards or it would sit on one half of the scene all night.
+        if not (self.can_move or self.sweep_ready()):
             self._go(State.PARKED, "camera is fixed")
             return
         if self._deadline is None:

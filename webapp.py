@@ -42,6 +42,7 @@ from pathlib import Path
 import yaml
 
 import config as config_mod
+import controller as ctrl_mod
 import vpn
 import wifi as wifi_mod
 from wifi import WiFi
@@ -433,6 +434,14 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             wifi_err="", wifi_msg="", wifi=None, wifi_networks=[],
             wifi_available=True, vpn=None, checked="", vpn_control=False,
             disk=_disk_report(),
+            sweep_enabled=(settings.sweep_enabled
+                           if settings is not None else False),
+            sweep_dwell=(settings.sweep_dwell_s
+                         if settings is not None else 4.0),
+            sweep_left_saved=(settings.sweep_left_saved
+                              if settings is not None else False),
+            sweep_right_saved=(settings.sweep_right_saved
+                               if settings is not None else False),
             likely=[], rest=[], active=set(), overridden=False,
             defaults=sorted(cfg.trigger_classes), saved="")
         ctx.update(extra)
@@ -1038,6 +1047,16 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                 out["health"] = health.status(cfg.events_root)
             except Exception:
                 log.exception("health status failed")
+        if settings is not None:
+            try:
+                out["sweep"] = {
+                    "enabled": settings.sweep_enabled,
+                    "left_saved": settings.sweep_left_saved,
+                    "right_saved": settings.sweep_right_saved,
+                    "ready": settings.sweep_ready,
+                }
+            except Exception:
+                log.exception("sweep status failed")
         return jsonify(out)
 
     @app.route("/api/ptz/move", methods=["POST"])
@@ -1089,6 +1108,61 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         except Exception as e:
             return jsonify(ok=False, error=str(e)), 200
         return jsonify(ok=True)
+
+    @app.route("/api/ptz/sweep/set", methods=["POST"])
+    @protected
+    def api_sweep_set():
+        """Save the current view as one end of the trigger-sweep.
+
+        The endpoints are camera presets because the camera reports no absolute
+        angle. 'Set Left' with the camera aimed at the left of the scene stores
+        that view; the sweep then oscillates between the two.
+        """
+        need_ptz()
+        if settings is None:
+            abort(503)
+        side = (request.form.get("dir") or "").lower()
+        preset = {"left": ctrl_mod.SWEEP_LEFT_PRESET,
+                  "right": ctrl_mod.SWEEP_RIGHT_PRESET}.get(side)
+        if preset is None:
+            return jsonify(ok=False, error="side must be left or right"), 200
+        try:
+            ptz.add_preset(preset)
+        except Exception as e:
+            return jsonify(ok=False, error=str(e)), 200
+        settings.mark_sweep_saved(side, True)
+        return jsonify(ok=True, side=side, ready=settings.sweep_ready)
+
+    @app.route("/api/ptz/sweep", methods=["POST"])
+    @protected
+    def api_sweep_toggle():
+        """Turn the trigger-sweep on or off from the panel."""
+        if settings is None:
+            abort(503)
+        on = request.form.get("enabled") == "1"
+        settings.set_sweep_enabled(on)
+        return jsonify(ok=True, enabled=settings.sweep_enabled,
+                       ready=settings.sweep_ready)
+
+    @app.route("/settings/sweep", methods=["POST"])
+    @protected
+    def settings_sweep():
+        """The settings-screen half: the enable toggle and the dwell time.
+
+        The endpoints themselves are saved from the panel (this camera has no
+        absolute angles to type in), so they are shown here read-only.
+        """
+        if settings is None:
+            abort(503)
+        settings.set_sweep_enabled(request.form.get("sweep_enabled") == "on")
+        raw = request.form.get("sweep_dwell", "")
+        try:
+            settings.set_sweep_dwell_s(float(raw))
+            msg = "Sweep settings saved."
+        except (TypeError, ValueError):
+            return _settings_page("classes",
+                                  sys_err="Dwell must be a number of seconds.")
+        return _settings_page("classes", sys_msg=msg)
 
     @app.route("/api/scan", methods=["POST"])
     @protected

@@ -188,6 +188,50 @@ class Settings:
         log.info("trigger classes set to: %s", sorted(wanted) or "(none)")
         return wanted
 
+    # --------------------------------------------------------------- sweep
+    # When triggered, the camera can oscillate between two saved positions to
+    # cover a scene wider than one field of view. The endpoints are camera
+    # presets (this camera reports no absolute angles), saved from the panel;
+    # here we keep only whether each has been set, plus the toggle and dwell.
+    @property
+    def sweep_enabled(self):
+        return bool(self.get("sweep_enabled", False))
+
+    def set_sweep_enabled(self, on):
+        self.set("sweep_enabled", bool(on))
+        log.info("trigger sweep %s", "on" if self.sweep_enabled else "off")
+        return self.sweep_enabled
+
+    @property
+    def sweep_dwell_s(self):
+        try:
+            return max(0.5, min(float(self.get("sweep_dwell_s", 4.0)), 60.0))
+        except (TypeError, ValueError):
+            return 4.0
+
+    def set_sweep_dwell_s(self, seconds):
+        self.set("sweep_dwell_s", max(0.5, min(float(seconds), 60.0)))
+        return self.sweep_dwell_s
+
+    @property
+    def sweep_left_saved(self):
+        return bool(self.get("sweep_left_saved", False))
+
+    @property
+    def sweep_right_saved(self):
+        return bool(self.get("sweep_right_saved", False))
+
+    def mark_sweep_saved(self, side, saved=True):
+        key = {"left": "sweep_left_saved", "right": "sweep_right_saved"}.get(side)
+        if key is None:
+            raise ValueError("side must be 'left' or 'right'")
+        self.set(key, bool(saved))
+
+    @property
+    def sweep_ready(self):
+        """Both endpoints saved -- the sweep has somewhere to go."""
+        return self.sweep_left_saved and self.sweep_right_saved
+
     # --------------------------------------------------------- credentials
     # PBKDF2-HMAC-SHA256: in the standard library on the board's Python 3.9,
     # no extra dependency, and the stored form reveals nothing useful if the
