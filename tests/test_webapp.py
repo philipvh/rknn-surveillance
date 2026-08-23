@@ -1525,3 +1525,181 @@ class TestTriggerSweepEndpoints(Base):
         self.assertIn("sweep", s)
         self.assertTrue(s["sweep"]["left_saved"])
         self.assertFalse(s["sweep"]["right_saved"])
+
+
+class TestSessionLimiter(unittest.TestCase):
+    """The clock itself, away from HTTP."""
+
+    def setUp(self):
+        from webapp import StreamSessions
+        self.now = 1000.0
+        self.s = StreamSessions(60.0, idle_reset_s=600.0,
+                                clock=lambda: self.now)
+
+    def test_a_session_runs_then_expires(self):
+        self.assertTrue(self.s.touch("a"))
+        self.now += 59
+        self.assertTrue(self.s.touch("a"))
+        self.now += 2
+        self.assertFalse(self.s.touch("a"))
+        self.assertTrue(self.s.expired("a"))
+
+    def test_watching_continuously_does_not_extend_it(self):
+        # The point is a cap, not an idle timeout: a tab streaming all night
+        # is exactly the case, and it is never idle.
+        self.assertTrue(self.s.touch("a"))
+        for _ in range(30):
+            self.now += 5
+            self.s.touch("a")
+        self.assertTrue(self.s.expired("a"))
+
+    def test_resume_starts_a_fresh_one(self):
+        self.s.touch("a")
+        self.now += 120
+        self.assertTrue(self.s.expired("a"))
+        self.s.resume("a")
+        self.assertFalse(self.s.expired("a"))
+        self.assertTrue(self.s.touch("a"))
+
+    def test_coming_back_much_later_is_a_new_visit(self):
+        # Closing the tab and returning tomorrow should not need a resume.
+        self.s.touch("a")
+        self.now += 5000
+        self.assertTrue(self.s.touch("a"))
+
+    def test_sessions_are_per_client(self):
+        self.s.touch("a")
+        self.now += 120
+        self.assertTrue(self.s.touch("b"))
+        self.assertTrue(self.s.expired("a"))
+
+    def test_zero_means_no_limit_at_all(self):
+        from webapp import StreamSessions
+        s = StreamSessions(0, clock=lambda: self.now)
+        self.assertFalse(s.enabled)
+        self.assertTrue(s.touch("a"))
+        self.now += 99999
+        self.assertTrue(s.touch("a"))
+        self.assertFalse(s.expired("a"))
+
+
+class TestSessionOverHttp(Base):
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}
+    REMOTE = {"REMOTE_ADDR": "10.8.2.9"}
+
+    def test_the_wall_tablet_is_never_timed_out(self):
+        # A panel that logs itself out is a dark screen when someone walks up.
+        s = self.c.get("/api/status", headers=self.auth(),
+                       environ_base=self.LOCAL).get_json()
+        self.assertFalse(s["session"]["limited"])
+
+    def test_a_remote_viewer_has_a_clock(self):
+        s = self.c.get("/api/status", headers=self.auth(),
+                       environ_base=self.REMOTE).get_json()
+        self.assertTrue(s["session"]["limited"])
+        self.assertGreater(s["session"]["remaining_s"], 0)
+        self.assertFalse(s["session"]["expired"])
+
+    def _tiny_session_app(self, minutes=0.002):
+        """An app whose remote session lasts about a tenth of a second."""
+        import webapp as w
+        self.cfg.raw["web"]["remote_session_minutes"] = minutes
+        app = w.create_app(self.cfg, ptz=self.ptz, controller=None,
+                           schedule=self.sched)
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def _open_and_close(self, client):
+        """Start a stream, which is what starts the clock, then let it go."""
+        r = client.get("/stream.mjpg", headers=self.auth(),
+                       environ_base=self.REMOTE)
+        self.assertEqual(r.status_code, 200)
+        r.response.close()
+
+    def test_an_expired_remote_stream_is_refused(self):
+        c2 = self._tiny_session_app()
+        self._open_and_close(c2)
+        time.sleep(0.2)
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=self.REMOTE)
+        self.assertEqual(r.status_code, 429)
+
+    def test_the_overlay_and_aiming_feeds_stop_too(self):
+        # The expensive ones; gating only the main view would miss the point.
+        c2 = self._tiny_session_app()
+        self._open_and_close(c2)
+        time.sleep(0.2)
+        for path in ("/aim.mjpg", "/detect.mjpg"):
+            r = c2.get(path, headers=self.auth(), environ_base=self.REMOTE)
+            self.assertIn(r.status_code, (429, 503), path)
+
+    def test_a_local_viewer_is_never_cut_off(self):
+        """The wall tablet keeps streaming past any session limit.
+
+        It must be the SAME client throughout: an earlier version of this test
+        opened the first stream as the remote address and then checked the
+        local one, which got a fresh session of its own and passed even with
+        the local exemption removed. It tested nothing.
+        """
+        c2 = self._tiny_session_app()
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 200)
+        r.response.close()
+        time.sleep(0.2)                      # well past the limit
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 200, "the wall tablet was cut off")
+        r.response.close()
+        # and the same address over the metered link does stop, so the
+        # difference really is where the viewer is
+        self._open_and_close(c2)
+        time.sleep(0.2)
+        self.assertEqual(c2.get("/stream.mjpg", headers=self.auth(),
+                                environ_base=self.REMOTE).status_code, 429)
+
+    def test_resume_lets_them_back_in(self):
+        c2 = self._tiny_session_app()
+        self._open_and_close(c2)
+        time.sleep(0.2)
+        self.assertEqual(c2.get("/stream.mjpg", headers=self.auth(),
+                                environ_base=self.REMOTE).status_code, 429)
+        c2.post("/api/session/resume", headers=self.auth(),
+                environ_base=self.REMOTE)
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=self.REMOTE)
+        self.assertEqual(r.status_code, 200)
+        r.response.close()
+
+    def test_switching_the_data_saver_off_does_not_disable_the_limit(self):
+        """They guard different failures and must not be wired together.
+
+        The saver trims a stream somebody is watching; the limit stops one
+        nobody is. Turning the saver off is exactly what a club does when it
+        buys a bigger bundle -- and it is the moment a forgotten tab starts
+        costing full rate, so the limit matters more then, not less.
+        """
+        from settings import Settings
+        import webapp as w
+        store = Settings(Path(self.tmp.name) / "s.json")
+        store.set_data_saver("off")
+        self.cfg.raw["web"]["remote_session_minutes"] = 0.002
+        app = w.create_app(self.cfg, ptz=self.ptz, controller=None,
+                           schedule=self.sched, settings=store)
+        app.config["TESTING"] = True
+        c2 = app.test_client()
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=self.REMOTE)
+        self.assertEqual(r.status_code, 200)
+        r.response.close()
+        time.sleep(0.2)
+        self.assertEqual(c2.get("/stream.mjpg", headers=self.auth(),
+                                environ_base=self.REMOTE).status_code, 429,
+                         "the session limit died with the data saver")
+
+    def test_the_panel_will_not_silently_reconnect(self):
+        # Without this the <img> error handler would restart the very stream
+        # the timeout just stopped, and the feature would do nothing.
+        body = self.c.get("/", headers=self.auth()).data.decode()
+        self.assertIn("if (sessionEnded) return;", body)
+        self.assertIn('id="resume"', body)

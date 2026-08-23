@@ -194,19 +194,15 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                 log.warning("web.local_networks: %r is not a network", item)
         return nets
 
-    def metered():
-        """True when the viewer should get the cheaper picture.
+    def is_remote():
+        """Whether this viewer is reached over the link that costs money.
 
-        Normally that means "not on the board's own wiring", but it is an
-        operator switch: on a 30 GB bundle the picture quality is worth more
-        than the saving, and which side of that trade a club is on is not
-        something to infer from the code.
+        Purely about where they are -- no policy. Kept separate from the data
+        saver on purpose: switching the saver off, which is the right call on
+        a large bundle, must not also switch off the session limit. They guard
+        different failures. The saver trims a stream somebody is watching; the
+        limit stops one nobody is.
         """
-        mode = settings.data_saver if settings is not None else "auto"
-        if mode == "off":
-            return False
-        if mode == "on":
-            return True
         addr = request.remote_addr or ""
         try:
             ip = ipaddress.ip_address(addr)
@@ -216,6 +212,44 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             if ip in net:
                 return False
         return True
+
+    def metered():
+        """True when the viewer should get the cheaper picture.
+
+        Normally "not on the board's own wiring", but it is an operator
+        switch: on a 30 GB bundle the picture quality is worth more than the
+        saving, and which side of that trade a club is on is not something to
+        infer from the code.
+        """
+        mode = settings.data_saver if settings is not None else "auto"
+        if mode == "off":
+            return False
+        if mode == "on":
+            return True
+        return is_remote()
+
+    _sessions = StreamSessions(
+        float(web.get("remote_session_minutes", 15)) * 60.0,
+        idle_reset_s=float(web.get("remote_session_idle_reset_s", 600)))
+
+    def _session_key():
+        return request.remote_addr or "?"
+
+    def _session_gate():
+        """(allowed_now, stop_when) for this request.
+
+        Local viewers are never gated: a wall panel that logs itself out is a
+        dark screen when somebody walks up to it.
+        """
+        if not is_remote() or not _sessions.enabled:
+            return True, None
+        key = _session_key()
+        allowed = _sessions.touch(key)
+
+        def stop_when():
+            return _sessions.expired(key)
+
+        return allowed, stop_when
 
     def need_ptz():
         if ptz is None:
@@ -634,6 +668,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
          "the aiming view is full-size frames, so this one costs the most"),
         ("web.local_networks", "Networks that are free", "text",
          "viewers here get full quality; anything else is treated as metered"),
+        ("web.remote_session_minutes", "Remote session limit (min)", "text",
+         "a remote live view stops itself after this long; 0 for no limit. "
+         "Never applies to viewers on the networks above"),
     )
 
     def _set(tree, path, value):
@@ -1019,9 +1056,12 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         # camera, including one whose control protocol we do not speak.
         if mode != "ffmpeg":
             need_ptz()
+        allowed, stop_when = _session_gate()
+        if not allowed:
+            abort(429, "remote viewing session has ended; press resume")
         if mode == "ffmpeg":
             return Response(
-                _ffmpeg_mjpeg(cfg, metered=metered()),
+                _ffmpeg_mjpeg(cfg, metered=metered(), stop_when=stop_when),
                 mimetype=("multipart/x-mixed-replace; "
                           f"boundary={FFMPEG_BOUNDARY}"))
         try:
@@ -1029,7 +1069,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         except ValueError:
             fps = 3.0
         fps = max(0.2, min(fps, 10.0))
-        return Response(_snapshot_mjpeg(grab, fps),
+        return Response(_snapshot_mjpeg(grab, fps, stop_when=stop_when),
                         mimetype=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
 
     @app.route("/aim.mjpg")
@@ -1046,6 +1086,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         have stopped.
         """
         need_ptz()
+        allowed, stop_when = _session_gate()
+        if not allowed:
+            abort(429, "remote viewing session has ended; press resume")
         default_fps = web.get("aim_metered_fps", 2) if metered() \
             else web.get("aim_fps", 6)
         try:
@@ -1061,9 +1104,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             src = grab
             def grab_small():
                 return _shrink(src(), w, q)
-            return Response(_snapshot_mjpeg(grab_small, fps),
+            return Response(_snapshot_mjpeg(grab_small, fps, stop_when=stop_when),
                             mimetype=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
-        return Response(_snapshot_mjpeg(grab, fps),
+        return Response(_snapshot_mjpeg(grab, fps, stop_when=stop_when),
                         mimetype=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
 
     # ------------------------------------------------------------------- api
@@ -1078,6 +1121,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         """
         if live is None:
             abort(503, "the detector is not running in this process")
+        allowed, stop_when = _session_gate()
+        if not allowed:
+            abort(429, "remote viewing session has ended; press resume")
 
         # Frames are dropped rather than re-encoded: the detector's JPEGs are
         # already made, and shrinking them here would cost a decode and encode
@@ -1096,6 +1142,8 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             idle = 0
             last = 0.0
             while True:
+                if stop_when is not None and stop_when():
+                    return
                 jpeg, seq = live.wait_for_new(seq, timeout=5.0)
                 if jpeg is None:
                     idle += 1
@@ -1148,6 +1196,13 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                 out["health"] = health.status(cfg.events_root)
             except Exception:
                 log.exception("health status failed")
+        if _sessions.enabled and is_remote():
+            key = _session_key()
+            out["session"] = {"limited": True,
+                              "remaining_s": int(_sessions.remaining(key) or 0),
+                              "expired": _sessions.expired(key)}
+        else:
+            out["session"] = {"limited": False}
         if usage is not None:
             try:
                 u = usage.report()
@@ -1291,6 +1346,14 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                            error="Set the Left and Right points first."), 200
         return jsonify(ok=True)
 
+    @app.route("/api/session/resume", methods=["POST"])
+    @protected
+    def api_session_resume():
+        """Somebody is actually watching; start the clock again."""
+        _sessions.resume(_session_key())
+        return jsonify(ok=True,
+                       remaining_s=_sessions.remaining(_session_key()))
+
     @app.route("/settings/datasaver", methods=["POST"])
     @protected
     def settings_datasaver():
@@ -1431,6 +1494,70 @@ def _human(n):
         n /= 1024
 
 
+class StreamSessions:
+    """How long a metered viewer may keep a stream open before saying so again.
+
+    The failure this exists for is a browser tab left open on a phone: nobody
+    is watching, the stream keeps running, and a mobile bundle goes overnight.
+    A person watching deliberately just presses resume; a forgotten tab does
+    not, which is the whole distinction.
+
+    Never applied to a viewer on the board's own network. The wall tablet is a
+    permanently-open tab by design, and timing it out would turn the panel
+    dark exactly when somebody walks up to it.
+
+    Keyed by client address, which is coarse -- two people behind one address
+    share a session -- but the alternative is a cookie and a login on a panel
+    that deliberately does not always have one.
+    """
+
+    def __init__(self, limit_s, idle_reset_s=600.0, clock=time.time):
+        self.limit_s = float(limit_s or 0.0)
+        self.idle_reset_s = float(idle_reset_s)
+        self._clock = clock
+        self._started = {}
+        self._seen = {}
+        self._lock = threading.Lock()
+
+    @property
+    def enabled(self):
+        return self.limit_s > 0
+
+    def touch(self, key):
+        """Note activity. Returns True if the session may continue."""
+        if not self.enabled:
+            return True
+        now = self._clock()
+        with self._lock:
+            last = self._seen.get(key)
+            # Away long enough that this is a new visit, not the same forgotten
+            # tab: start the clock again rather than making them press resume
+            # for something they closed hours ago.
+            if last is None or (now - last) > self.idle_reset_s:
+                self._started[key] = now
+            self._seen[key] = now
+            return (now - self._started[key]) < self.limit_s
+
+    def remaining(self, key):
+        if not self.enabled:
+            return None
+        with self._lock:
+            started = self._started.get(key)
+            if started is None:
+                return self.limit_s
+            return max(0.0, self.limit_s - (self._clock() - started))
+
+    def expired(self, key):
+        return self.enabled and self.remaining(key) <= 0
+
+    def resume(self, key):
+        """Start a fresh session -- someone is actually there."""
+        now = self._clock()
+        with self._lock:
+            self._started[key] = now
+            self._seen[key] = now
+
+
 def _shrink(jpeg, width, quality):
     """Re-encode a JPEG smaller, for a viewer on a data bundle.
 
@@ -1470,10 +1597,12 @@ def _part(jpeg):
             + jpeg + b"\r\n")
 
 
-def _snapshot_mjpeg(grab, fps):
+def _snapshot_mjpeg(grab, fps, stop_when=None):
     interval = 1.0 / fps
     fails = 0
     while True:
+        if stop_when is not None and stop_when():
+            return
         started = time.time()
         try:
             frame = grab()
@@ -1494,7 +1623,7 @@ def _snapshot_mjpeg(grab, fps):
             time.sleep(delay)
 
 
-def _ffmpeg_mjpeg(cfg, metered=False):
+def _ffmpeg_mjpeg(cfg, metered=False, stop_when=None):
     web = cfg.web or {}
     scale = int(web.get("ffmpeg_scale", 960))
     fps = float(web.get("stream_fps", 3))
@@ -1520,6 +1649,8 @@ def _ffmpeg_mjpeg(cfg, metered=False):
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL, bufsize=0)
         while True:
+            if stop_when is not None and stop_when():
+                return
             chunk = proc.stdout.read(16384)
             if not chunk:
                 return

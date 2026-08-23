@@ -146,6 +146,14 @@ web:
   metered_quality: 12        # ffmpeg -q:v; higher is smaller and coarser
   aim_metered_fps: 2         # the aiming feed is full-size JPEGs, so this bites
 
+  # A remote viewing session stops on its own after this long, because the way
+  # a bundle really goes is a browser tab left open on a phone overnight with
+  # nobody watching. Pressing resume starts another; a forgotten tab does not.
+  # Never applied to a viewer on local_networks -- the wall panel is a
+  # permanently-open tab by design and must not go dark.
+  remote_session_minutes: 15      # 0 to switch the limit off
+  remote_session_idle_reset_s: 600  # away this long and the next visit is fresh
+
 # The mobile bundle, if the uplink is one. Purely so the number is visible on
 # the panel before it turns up on a bill -- nothing here throttles or cuts off.
 # Set limit_gb: 0 to show usage without a percentage.

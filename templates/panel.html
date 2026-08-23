@@ -116,6 +116,19 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
 .dataline.warn .meter i { background:#7a5a2a; }
 .dataline.over { border-color:#7a3b2a; color:#e0a64a; }
 .dataline.over .meter i { background:#7a3b2a; }
+/* Shown instead of the live view once a remote session has run out. The
+   point of the whole feature is that this does NOT clear itself: a person
+   presses the button, a forgotten tab does not. */
+#ended { position:absolute; left:0; top:0; right:0; bottom:0; display:none;
+  background:rgba(13,19,16,.92); z-index:8;
+  -webkit-align-items:center; align-items:center;
+  -webkit-justify-content:center; justify-content:center; }
+#ended.on { display:-webkit-flex; display:flex; }
+#ended .box { max-width:22em; padding:18px; text-align:center; }
+#ended b { display:block; font-size:17px; margin-bottom:8px; color:#dfe7e1; }
+#ended span { display:block; font-size:13px; color:#8fa39a; margin-bottom:14px;
+  line-height:1.5; }
+#ended button { font-size:16px; padding:12px 20px; }
 #msg { position:absolute; left:10px; bottom:10px; right:10px; padding:8px 12px;
   background:rgba(20,10,4,.92); color:#e0a64a; font-size:14px; border-radius:3px;
   display:none; }
@@ -156,6 +169,14 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       {% if metered %}
       <div id="metered">DATA SAVER &middot; remote link, reduced picture</div>
       {% endif %}
+      <div id="ended">
+        <div class="box">
+          <b>Viewing session ended</b>
+          <span>The live view stops on its own so a forgotten tab cannot
+                spend the mobile bundle overnight.</span>
+          <button id="resume">Resume viewing</button>
+        </div>
+      </div>
       <div id="msg"></div>
     </div>
     <div id="pad">
@@ -446,6 +467,34 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
      becomes money, and because the way it was found out last time was an
      invoice. Hidden entirely when no bundle is configured, so a board on
      fixed wiring is not nagged about a limit it does not have. */
+  /* ---- remote viewing session ---------------------------------------- */
+  var sessionEnded = false;
+  var endedEl = document.getElementById('ended');
+  function updateSession(sess) {
+    var was = sessionEnded;
+    sessionEnded = !!(sess && sess.limited && sess.expired);
+    if (endedEl) endedEl.className = sessionEnded ? 'on' : '';
+    if (sessionEnded && !was) {
+      /* drop everything that costs data */
+      live.src = '';
+      showAim(false);
+    } else if (!sessionEnded && was) {
+      startStream();
+    }
+  }
+  var resumeBtn = document.getElementById('resume');
+  if (resumeBtn) {
+    resumeBtn.addEventListener('click', function (e) {
+      e.preventDefault();
+      post('/api/session/resume', '', function () {
+        sessionEnded = false;
+        if (endedEl) endedEl.className = '';
+        startStream();
+        refresh();
+      });
+    }, false);
+  }
+
   var dataEl = document.getElementById('datause');
   function updateData(u) {
     if (!dataEl) return;
@@ -535,6 +584,7 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
       if (s.sweep) updateSweep(s.sweep);
       updateData(s.usage);
+      updateSession(s.session);
       /* Show the near-live PiP whenever the camera is moving on its own, so a
          sweep is watchable without the transcode's lag. */
       aimAuto = (s.state === 'sweeping' || s.state === 'scanning'
@@ -577,8 +627,12 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       e.preventDefault(); setOverlays(!showDetector, true);
     }, false);
   }
+  /* The stream ends when the session does, and an <img> reports that as an
+     error. Reconnecting then would restart the very stream the timeout just
+     stopped, so the reload is suppressed while ended. */
   live.addEventListener('error', function () {
-    setTimeout(startStream, 5000);
+    if (sessionEnded) return;
+    setTimeout(function () { if (!sessionEnded) startStream(); }, 5000);
   }, false);
   setOverlays(showDetector, true);
 })();
