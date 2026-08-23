@@ -362,6 +362,17 @@ def main(argv=None):
                             annotated=annotated, capture=capture,
                             settings=user_settings)
 
+    # Panel-set motor tuning, applied before anything can move. The camera's
+    # own speed setting has otherwise never been sent: config carried a
+    # ptz.speed for a long time that nothing ever applied.
+    try:
+        ptz.apply_tuning(speed=(user_settings.sweep_speed
+                                if user_settings.sweep_speed is not None
+                                else cfg._get("ptz", "speed", default=None)),
+                         auto_budget_s=user_settings.sweep_budget_s)
+    except Exception:
+        log.exception("could not apply the camera tuning")
+
     trigger = trigger_mod.TriggerInput(cfg, on_event=controller.on_pir)
     trigger.start()
 

@@ -674,6 +674,33 @@ trigger a recording</b>. The camera keeps watching and keeps nothing.</div>
              value="{{ '%.1f'|format(sweep_dwell) }}"
              style="width:6em"> seconds
     </label>
+    <label style="display:block;margin:8px 0">
+      Speed
+      <select name="sweep_speed" style="width:12em">
+        <option value="" {% if sweep_speed is none %}selected{% endif %}>camera default</option>
+        {% for lvl, lbl in [(0,'0 - fastest'), (1,'1'), (2,'2 - middle'),
+                            (3,'3'), (4,'4 - slowest')] %}
+        <option value="{{ lvl }}" {% if sweep_speed == lvl %}selected{% endif %}>{{ lbl }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <p style="color:#6d8378;font-size:13px;margin:0 0 8px">
+      Slower is gentler on the motors and gives a sharper picture at each end;
+      faster spends less time in transit.
+    </p>
+    <label style="display:block;margin:8px 0">
+      Motor budget
+      <input type="number" name="sweep_budget" min="30" max="3600" step="30"
+             value="{{ '%.0f'|format(sweep_budget) }}"
+             style="width:6em"> seconds of movement per hour
+    </label>
+    <p style="color:#6d8378;font-size:13px;margin:0 0 8px">
+      A rolling hour, so repetition cannot wear the dome out over a season.
+      Each move between two points is charged about three seconds, so 600
+      allows roughly twenty minutes of sweeping an hour. Set too low and a
+      long incident spends it all and later ones get no sweep at all.
+      Coming home is always allowed, whatever is left.
+    </p>
     <p style="color:#6d8378;font-size:13px">
       Left endpoint: <b style="color:#8fa39a">{{ 'set' if sweep_left_saved else 'not set' }}</b>,
       right endpoint: <b style="color:#8fa39a">{{ 'set' if sweep_right_saved else 'not set' }}</b>.

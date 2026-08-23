@@ -536,6 +536,26 @@ class PTZ:
     def set_speed(self, level):
         return self._cam().set_speed(level)
 
+    def apply_tuning(self, speed=None, auto_budget_s=None):
+        """Push panel-set motor tuning onto a running driver.
+
+        Called at startup and whenever the settings change, so neither needs a
+        restart. Both are optional: None means "leave whatever is configured".
+        A camera with no speed control is not an error here -- the budget
+        still applies, and that is the part that protects the motors.
+        """
+        if auto_budget_s:
+            self.budget.limits["auto"] = float(auto_budget_s)
+            log.info("automatic motor budget set to %.0fs/hour", float(auto_budget_s))
+        if speed is not None:
+            try:
+                self.set_speed(speed)
+                log.info("camera speed set to %s", speed)
+            except NotSupported:
+                log.info("this camera has no speed control; ignoring the setting")
+            except PTZError as e:
+                log.warning("could not set the camera speed: %s", e)
+
     def set_time(self, when_utc=None, offset_seconds=None):
         """Push the clock to the camera, correct for the season.
 

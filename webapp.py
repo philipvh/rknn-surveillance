@@ -438,6 +438,11 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                            if settings is not None else False),
             sweep_dwell=(settings.sweep_dwell_s
                          if settings is not None else 4.0),
+            sweep_speed=(settings.sweep_speed if settings is not None else None),
+            sweep_budget=(
+                (settings.sweep_budget_s if settings is not None else None)
+                or cfg._get("ptz", "budget", "auto_seconds_per_hour",
+                            default=600)),
             sweep_left_saved=(settings.sweep_left_saved
                               if settings is not None else False),
             sweep_right_saved=(settings.sweep_right_saved
@@ -1192,14 +1197,29 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         if settings is None:
             abort(503)
         settings.set_sweep_enabled(request.form.get("sweep_enabled") == "on")
-        raw = request.form.get("sweep_dwell", "")
         try:
-            settings.set_sweep_dwell_s(float(raw))
-            msg = "Sweep settings saved."
+            settings.set_sweep_dwell_s(float(request.form.get("sweep_dwell", "")))
         except (TypeError, ValueError):
             return _settings_page("classes",
                                   sys_err="Dwell must be a number of seconds.")
-        return _settings_page("classes", sys_msg=msg)
+        try:
+            settings.set_sweep_speed(request.form.get("sweep_speed", ""))
+        except (TypeError, ValueError):
+            return _settings_page("classes",
+                                  sys_err="Speed must be a whole number 0-4.")
+        try:
+            settings.set_sweep_budget_s(request.form.get("sweep_budget", ""))
+        except (TypeError, ValueError):
+            return _settings_page(
+                "classes", sys_err="Motor budget must be a number of seconds.")
+        # Live, so neither the speed nor the budget needs a restart.
+        if ptz is not None:
+            try:
+                ptz.apply_tuning(speed=settings.sweep_speed,
+                                 auto_budget_s=settings.sweep_budget_s)
+            except Exception:
+                log.exception("could not apply the sweep tuning")
+        return _settings_page("classes", sys_msg="Sweep settings saved.")
 
     @app.route("/api/scan", methods=["POST"])
     @protected

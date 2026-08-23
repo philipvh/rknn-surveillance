@@ -214,6 +214,51 @@ class Settings:
         return self.sweep_dwell_s
 
     @property
+    def sweep_speed(self):
+        """How fast the dome moves, or None to leave the camera as it is.
+
+        Slower is gentler on the motors and gives less motion blur at each
+        end of a sweep; faster spends less time in transit. Scale is the
+        camera's own (0 fastest .. 4 slowest on Foscam).
+        """
+        v = self.get("sweep_speed", None)
+        if v is None or v == "":
+            return None
+        try:
+            return max(0, min(int(v), 4))
+        except (TypeError, ValueError):
+            return None
+
+    def set_sweep_speed(self, level):
+        if level is None or level == "":
+            self.clear("sweep_speed")
+            return None
+        self.set("sweep_speed", max(0, min(int(level), 4)))
+        return self.sweep_speed
+
+    @property
+    def sweep_budget_s(self):
+        """Seconds of automatic movement allowed per rolling hour.
+
+        The cap that stops repetition wearing the dome out. None means use
+        whatever config.yaml says.
+        """
+        v = self.get("sweep_budget_s", None)
+        if v is None or v == "":
+            return None
+        try:
+            return max(30.0, min(float(v), 3600.0))
+        except (TypeError, ValueError):
+            return None
+
+    def set_sweep_budget_s(self, seconds):
+        if seconds is None or seconds == "":
+            self.clear("sweep_budget_s")
+            return None
+        self.set("sweep_budget_s", max(30.0, min(float(seconds), 3600.0)))
+        return self.sweep_budget_s
+
+    @property
     def sweep_left_saved(self):
         return bool(self.get("sweep_left_saved", False))
 

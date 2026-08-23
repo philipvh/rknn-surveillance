@@ -1313,6 +1313,38 @@ class TestTriggerSweepEndpoints(Base):
         self.assertTrue(self.store.sweep_enabled)
         self.assertEqual(self.store.sweep_dwell_s, 7.5)
 
+    def test_settings_screen_saves_speed_and_budget(self):
+        r = self.c.post("/settings/sweep",
+                        data={"sweep_enabled": "on", "sweep_dwell": "6",
+                              "sweep_speed": "3", "sweep_budget": "600"},
+                        headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.store.sweep_speed, 3)
+        self.assertEqual(self.store.sweep_budget_s, 600.0)
+
+    def test_the_budget_takes_effect_without_a_restart(self):
+        # The whole point of putting it on the panel.
+        self.c.post("/settings/sweep",
+                    data={"sweep_enabled": "on", "sweep_dwell": "6",
+                          "sweep_speed": "", "sweep_budget": "450"},
+                    headers=self.auth())
+        self.assertEqual(self.ptz.budget.limits["auto"], 450.0)
+
+    def test_a_blank_speed_leaves_the_camera_alone(self):
+        self.c.post("/settings/sweep",
+                    data={"sweep_enabled": "on", "sweep_dwell": "6",
+                          "sweep_speed": "", "sweep_budget": "600"},
+                    headers=self.auth())
+        self.assertIsNone(self.store.sweep_speed)
+
+    def test_speed_and_budget_are_clamped_not_trusted(self):
+        self.c.post("/settings/sweep",
+                    data={"sweep_enabled": "on", "sweep_dwell": "6",
+                          "sweep_speed": "99", "sweep_budget": "999999"},
+                    headers=self.auth())
+        self.assertLessEqual(self.store.sweep_speed, 4)
+        self.assertLessEqual(self.store.sweep_budget_s, 3600.0)
+
     def test_settings_screen_rejects_a_bad_dwell(self):
         r = self.c.post("/settings/sweep",
                         data={"sweep_enabled": "on", "sweep_dwell": "soon"},

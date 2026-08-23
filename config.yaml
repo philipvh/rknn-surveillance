@@ -163,9 +163,21 @@ ptz:
   preset_move_estimate_s: 3.0  # charged to the budget for a goto
 
   budget:
-    auto_seconds_per_hour: 90
+    # A rolling hour of motor-seconds, so repetition cannot grind the dome down
+    # over a season. Every preset move is charged preset_move_estimate_s, which
+    # is deliberately generous: a leg between two nearby sweep points really
+    # takes a second or two, so the real duty cycle is well under the charge.
+    #
+    # 600s came from a live test. The original 90s was sized for the old model
+    # -- a PIR trigger and a short scan of fixed presets, a few times an hour.
+    # A trigger-sweep charges 3s a leg and does a leg every dwell + travel, so
+    # it spent the whole hour in about three and a half minutes and three of
+    # four incidents that evening got no sweep at all.
+    auto_seconds_per_hour: 600
     manual_seconds_per_hour: 300
-    min_scan_interval_s: 60
+    # How soon a new automatic sweep may start after the last one. 60s meant a
+    # second incident a minute later was refused outright.
+    min_scan_interval_s: 20
 
   http:
     timeout_s: 5.0
