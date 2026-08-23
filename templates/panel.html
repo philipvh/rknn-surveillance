@@ -24,27 +24,44 @@ html, body { margin:0; padding:0; height:100%; background:#0d1310; color:#dfe7e1
 #body { -webkit-flex:1; flex:1; display:-webkit-flex; display:flex; min-height:0; }
 #view { -webkit-flex:1; flex:1; position:relative; background:#000; min-width:0; }
 #view img { width:100%; height:100%; object-fit:contain; display:block; }
+/* The aiming view: a picture-in-picture shown only while a move button is
+   held. The main view transcodes RTSP and lags by a second or more -- too far
+   behind to steer by -- so this corner polls the camera's stills endpoint,
+   where every frame is the current one. */
+#aimbox { position:absolute; right:8px; top:8px;
+  width:42%; max-width:340px; border:2px solid #3f8a6c; border-radius:4px;
+  background:#000; box-shadow:0 2px 10px rgba(0,0,0,.6);
+  display:none; z-index:6; }
+#aimbox.on { display:block; }
+/* Override the #view img 100%/100% rule: inside the box the image fills the
+   width and keeps its own height. */
+#aimbox img { width:100%; height:auto; display:block; }
+/* A label so it reads as the live-now feed, not a freeze. */
+#aimtag { position:absolute; left:0; top:0; padding:2px 6px;
+  background:rgba(47,106,83,.92); color:#eef5f1; font-size:11px;
+  font-weight:bold; letter-spacing:.06em; border-bottom-right-radius:3px;
+  pointer-events:none; }
 /* A column, so the notice can be pushed to the foot of the pad. Children are
    0 0 auto: as a flex container the default shrink of 1 would squash the
    buttons when the controls are taller than the screen. */
-#pad { -webkit-flex:0 0 300px; flex:0 0 300px; padding:10px;
+#pad { -webkit-flex:0 0 300px; flex:0 0 300px; padding:10px 10px 8px;
   overflow-y:auto; background:#111a16; border-left:1px solid #24322c;
   display:-webkit-flex; display:flex;
   -webkit-flex-direction:column; flex-direction:column; }
 #pad > * { -webkit-flex:0 0 auto; flex:0 0 auto; }
-.row { display:-webkit-flex; display:flex; margin-bottom:8px; }
+.row { display:-webkit-flex; display:flex; margin-bottom:6px; }
 .row > * { -webkit-flex:1; flex:1; margin-right:8px; }
 .row > *:last-child { margin-right:0; }
-button { font-size:17px; font-weight:bold; padding:16px 8px; border:1px solid #2f3f38;
+button { font-size:16px; font-weight:bold; padding:11px 8px; border:1px solid #2f3f38;
   background:#1b2721; color:#dfe7e1; border-radius:4px; -webkit-user-select:none;
   user-select:none; touch-action:manipulation; }
 button:active, button.on { background:#2f6a53; border-color:#3f8a6c; }
-button.wide { padding:14px 8px; font-size:15px; }
-button.small { font-size:13px; padding:10px 6px; font-weight:normal; }
+button.wide { padding:10px 8px; font-size:15px; }
+button.small { font-size:13px; padding:7px 6px; font-weight:normal; }
 button[disabled] { opacity:.35; }
-.dpad button { height:64px; }
+.dpad button { height:50px; }
 .spacer { visibility:hidden; }
-h3 { margin:14px 0 6px; font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+h3 { margin:9px 0 4px; font-size:11px; letter-spacing:.14em; text-transform:uppercase;
   color:#6d8378; font-weight:bold; }
 /* A switch, because the state is what matters here -- a button labelled with
    the thing it would switch to makes you read it twice to learn where you are. */
@@ -98,6 +115,7 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
   <div id="body">
     <div id="view">
       <img id="live" alt="live view">
+      <div id="aimbox"><span id="aimtag">LIVE &middot; aiming</span><img id="aim" alt="aiming view"></div>
       <div id="msg"></div>
     </div>
     <div id="pad">
@@ -160,15 +178,11 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       </div>
 
       <div id="legal">
-        <b>&copy; 2026 Philip van Houtte<br>magicview.tv, the Netherlands</b>
-        <span class="warn">Provided as an aid, without warranty. It may miss
-        events, lose footage or stop without warning; no liability is accepted
-        for any loss or damage arising from its use or from a failure to
-        detect, record or report an event.</span>
-        <a href="/legal">Apache&nbsp;2.0 &mdash; licence &amp; notices</a>
-        {% if source_url %}
-        <a href="{{ source_url }}" class="src">{{ source_url|replace('https://', '') }}</a>
-        {% endif %}
+        <b>&copy; 2026 Philip van Houtte &middot; magicview.tv</b>
+        <span class="warn">An aid, without warranty &mdash; it may miss or lose
+        events.</span>
+        <a href="/legal">Licence, notices &amp; full disclaimer</a>
+        {% if source_url %}<a href="{{ source_url }}" class="src">{{ source_url|replace('https://', '') }}</a>{% endif %}
       </div>
     </div>
   </div>
@@ -212,6 +226,23 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
      that fails -- and on a tablet that sleeps mid-press, it will -- the
      server's own deadline stops the motors anyway. This is belt; the
      braces are in ptz.py. */
+  /* The picture-in-picture aiming feed. Shown only while moving, and its src
+     cleared on stop so the server stops polling the camera the instant the
+     button is released -- the whole point is that it is current, and a feed
+     left running when nobody is steering is just load on the camera. */
+  var aimbox = document.getElementById('aimbox');
+  var aimimg = document.getElementById('aim');
+  function showAim(on) {
+    if (!aimbox) return;
+    if (on) {
+      aimimg.src = '/aim.mjpg?t=' + (new Date()).getTime();
+      aimbox.className = 'on';
+    } else {
+      aimbox.className = '';
+      aimimg.src = '';            /* stops the MJPEG request */
+    }
+  }
+
   function startMove(kind, dir) {
     stopMove(true);
     moving = { kind: kind, dir: dir };
@@ -219,11 +250,13 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       post('/api/ptz/' + kind, 'dir=' + encodeURIComponent(dir), handle);
     };
     send();
+    showAim(true);
     timer = setInterval(function () { if (moving) send(); }, KEEPALIVE);
   }
 
   function stopMove(quiet) {
     if (timer) { clearInterval(timer); timer = null; }
+    showAim(false);
     if (!moving) return;
     moving = null;
     post('/api/ptz/stop', '', quiet ? null : handle);
@@ -257,6 +290,10 @@ button.sw.on .knob { left:27px; background:#eef5f1; }
       el.addEventListener('click', function (e) {
         e.preventDefault();
         post('/api/ptz/preset', 'name=' + encodeURIComponent(el.getAttribute('data-preset')), handle);
+        /* a preset jump takes a few seconds; show the fresh feed until it
+           arrives, unless a manual move takes over in the meantime */
+        showAim(true);
+        setTimeout(function () { if (!moving) showAim(false); }, 4000);
       }, false);
     })(els[i]);
   }

@@ -217,6 +217,18 @@ class TestLiveView(Base):
         self.assertIn(b"image/jpeg", chunk)
         it.close()
 
+    def test_aim_stream_is_fresh_snapshots_regardless_of_stream_mode(self):
+        # The aiming feed polls the stills endpoint even when the main view is
+        # in ffmpeg mode, so it is always the current frame with no RTSP
+        # buffering -- that is the whole reason it exists.
+        r = self.c.get("/aim.mjpg?fps=6", headers=self.auth())
+        self.assertIn("multipart/x-mixed-replace", r.headers["Content-Type"])
+        it = r.response
+        chunk = next(iter(it))
+        self.assertIn(b"--rknnframe", chunk)
+        self.assertIn(b"image/jpeg", chunk)
+        it.close()
+
 
 class TestBrowsing(Base):
     def test_lists_event_clips(self):

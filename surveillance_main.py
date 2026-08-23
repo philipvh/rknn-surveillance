@@ -398,6 +398,31 @@ def main(argv=None):
 
     threading.Thread(target=heartbeat_loop, daemon=True,
                      name="heartbeat").start()
+
+    def camera_clock_loop():
+        """Keep the camera's clock right, because it cannot itself.
+
+        The camera is on the isolated segment with no route to NTP, and its
+        firmware ignores its own DST flag, so left alone its clock free-runs
+        and stays on winter time all summer. The board has NTP and handles DST,
+        so it pushes UTC plus the correct offset -- on startup and hourly, the
+        hour chosen so a DST changeover is corrected within the hour and a
+        free-running drift never grows large. A wrong timestamp burned into a
+        vandalism clip is the kind of error found only when the footage is
+        needed, which is too late.
+        """
+        while True:
+            try:
+                ptz.set_time()
+                log.info("camera clock synced")
+            except Exception as e:
+                log.warning("could not sync the camera clock: %s", e)
+            time.sleep(3600)
+
+    if getattr(ptz, "enabled", False):
+        threading.Thread(target=camera_clock_loop, daemon=True,
+                         name="camera-clock").start()
+
     log.info("wall panel on http://%s:%s/",
              web.get("bind", "0.0.0.0"), web.get("port", 8080))
 

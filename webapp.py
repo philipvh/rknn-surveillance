@@ -953,6 +953,28 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return Response(_snapshot_mjpeg(grab, fps),
                         mimetype=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
 
+    @app.route("/aim.mjpg")
+    @protected
+    def aim_stream():
+        """A low-latency feed for while the camera is being aimed.
+
+        The main view transcodes RTSP, which buffers -- fine to watch, too far
+        behind to steer by. This polls the camera's stills endpoint instead:
+        every frame is the current one, with none of the stream's buffering, so
+        what you see is where the camera is now. The panel shows it in a
+        picture-in-picture only while a move button is held, because at ~6 fps
+        of full JPEGs it is heavier than the main view and pointless once you
+        have stopped.
+        """
+        need_ptz()
+        try:
+            fps = float(request.args.get("fps", web.get("aim_fps", 6)))
+        except ValueError:
+            fps = 6.0
+        fps = max(1.0, min(fps, 10.0))
+        return Response(_snapshot_mjpeg(grab, fps),
+                        mimetype=f"multipart/x-mixed-replace; boundary={BOUNDARY}")
+
     # ------------------------------------------------------------------- api
     @app.route("/detect.mjpg")
     @protected
@@ -1197,7 +1219,13 @@ def _ffmpeg_mjpeg(cfg):
     web = cfg.web or {}
     scale = int(web.get("ffmpeg_scale", 960))
     fps = float(web.get("stream_fps", 3))
+    # Low-delay input: do not build a big reorder buffer or spend time probing
+    # before the first frame. On a live RTSP source that buffering is most of
+    # the lag between the world and the panel; it buys nothing here because the
+    # stream is watched, not seeked. The aiming picture-in-picture goes further
+    # and bypasses RTSP entirely, but this makes the main view usable too.
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+           "-fflags", "nobuffer", "-flags", "low_delay",
            "-rtsp_transport", "tcp", "-i", cfg.detection_rtsp,
            "-vf", f"scale={scale}:-2,fps={fps}",
            "-f", "mpjpeg", "-q:v", "6", "-"]

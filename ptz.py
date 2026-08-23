@@ -61,6 +61,26 @@ STOP_CMD = "ptzStopRun"
 ZOOM_STOP_CMD = "zoomStop"
 
 
+def foscam_time_params(utc, offset_seconds):
+    """Build setSystemTime arguments for a UTC instant and a local offset.
+
+    The camera treats the value it is given as UTC and then adds its timeZone
+    for display -- and Foscam's timeZone has the opposite sign to everyone
+    else's, so GMT+1 is -3600, not +3600. Both quirks are confined to this one
+    function: give it a UTC datetime and the real offset east of UTC in
+    seconds (positive for the Netherlands), and it returns the right dict.
+    isDst is left 0 on purpose -- the offset already carries summer time, and
+    this firmware's own DST flag does nothing.
+    """
+    return {
+        "timeSource": "1",              # manual: we are the time source
+        "timeZone": str(-int(offset_seconds)),
+        "isDst": "0",
+        "year": str(utc.year), "mon": str(utc.month), "day": str(utc.day),
+        "hour": str(utc.hour), "minute": str(utc.minute), "sec": str(utc.second),
+    }
+
+
 class PTZError(Exception):
     pass
 
@@ -549,6 +569,33 @@ class PTZ:
     # ----------------------------------------------------------------- misc
     def set_speed(self, level):
         return self._call("setPTZSpeed", speed=int(level))
+
+    def set_time(self, when_utc=None, offset_seconds=None):
+        """Push the clock to the camera, correct for the season.
+
+        This camera cannot be left to keep its own time. It is on the isolated
+        segment with no path to an NTP server, so its clock free-runs; and its
+        firmware ignores the isDst flag, so even with time it would not follow
+        summer time. Both are fixed here by not trusting the camera with any of
+        it: the board -- which does have NTP and does handle DST -- hands over
+        UTC plus the offset that is correct right now, and the camera only has
+        to add them. Run periodically, because a free-running clock drifts and
+        because the offset changes twice a year.
+
+        The wrong time on a vandalism clip is not a cosmetic problem: it is the
+        difference between footage that corroborates an account and footage a
+        defence can wave away.
+        """
+        import datetime as _dt
+        import time as _t
+        if when_utc is None:
+            when_utc = _dt.datetime.utcnow()
+        if offset_seconds is None:
+            # The offset in effect at this instant, DST and all, from the OS.
+            offset_seconds = (-_t.timezone if _t.localtime().tm_isdst <= 0
+                              else -_t.altzone)
+        return self._call("setSystemTime",
+                          **foscam_time_params(when_utc, offset_seconds))
 
     def dev_state(self):
         return self._call("getDevState")
