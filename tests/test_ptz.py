@@ -539,3 +539,24 @@ class TestSetTime(Base):
         self.assertEqual(captured["timeZone"], "-7200")
         self.assertEqual(captured["hour"], "8")
         self.assertEqual(captured["timeSource"], "1")
+
+
+class TestPresetOverwrite(Base):
+    def test_add_preset_deletes_first_so_it_overwrites(self):
+        # Foscam's add will not overwrite; without a delete first, re-aiming a
+        # preset silently keeps the old position. The order must be delete then
+        # add.
+        p = self.ptz()
+        self.cam.clear()
+        p.add_preset("Home")
+        order = [c for c in self.cam.calls
+                 if c in ("ptzDeletePresetPoint", "ptzAddPresetPoint")]
+        self.assertEqual(order, ["ptzDeletePresetPoint", "ptzAddPresetPoint"])
+
+    def test_add_preset_survives_a_missing_preset_on_delete(self):
+        # Deleting a name that is not there raises; add must still happen.
+        p = self.ptz()
+        self.cam.fail_cmds.add("ptzDeletePresetPoint")
+        self.cam.clear()
+        p.add_preset("Fresh")
+        self.assertIn("ptzAddPresetPoint", self.cam.calls)

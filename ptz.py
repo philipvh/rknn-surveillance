@@ -557,11 +557,20 @@ class PTZ:
             self.last_stopped_at = self._clock() + self.preset_estimate_s
         log.info("goto preset %r (%s)", name, source)
 
-    def add_preset(self, name):
-        return self._call("ptzAddPresetPoint", name=name)
-
     def delete_preset(self, name):
         return self._call("ptzDeletePresetPoint", name=name)
+
+    def add_preset(self, name):
+        # ptzAddPresetPoint will NOT overwrite an existing name: the camera
+        # returns success but keeps the original position, so re-aiming a preset
+        # from the panel silently does nothing -- which is exactly how "Set
+        # Home" appeared broken. Delete first (ignoring "not there"), then add,
+        # so saving a preset always stores the current view.
+        try:
+            self.delete_preset(name)
+        except PTZError:
+            pass
+        return self._call("ptzAddPresetPoint", name=name)
 
     def go_home(self, source="auto"):
         return self.goto_preset(self.p.get("home_preset", "Home"), source=source)
