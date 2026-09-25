@@ -257,14 +257,17 @@ def main(argv=None):
         # recovered window is not bounded at all -- and one enormous file is
         # worse than two, both to cut and to seek in.
         cap = float(cfg._get("capture", "max_clip_seconds", default=600.0))
-        limit = max(1, int(cap // max(1, cfg.segment_seconds)))
-        if len(segs) > limit:
-            log.warning("window is %d segment(s); cutting the first %d "
-                        "(%.0fs cap) and dropping the rest",
-                        len(segs), limit, cap)
-            segs = segs[:limit]
-
-        from segments import parse_seg_start
+        from segments import cap_window, parse_seg_start
+        before = len(segs)
+        # `end` comes back trimmed too: the file must not claim a window it
+        # does not contain, or the browser files every still of the day under
+        # it and the real clips show none.
+        segs, end, capped = cap_window(segs, cap, cfg.segment_seconds, end)
+        if capped:
+            log.warning("window was %d segment(s); cutting the first %d "
+                        "(%.0fs cap) and dropping the rest -- the clip is "
+                        "named for what it holds, ending %s",
+                        before, len(segs), cap, end.strftime("%H:%M:%S"))
         t0 = parse_seg_start(segs[0]) or start
         day_dir = cfg.events_root / t0.strftime(DAY_FMT)
         day_dir.mkdir(parents=True, exist_ok=True)

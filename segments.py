@@ -77,3 +77,23 @@ def pinned_paths(concat_mgr, tier_path, since, segment_seconds, now=None):
         for f in list_segments_between(since, now, tier_path, segment_seconds):
             pinned.add(f.resolve())
     return pinned
+
+def cap_window(segs, cap_s, segment_seconds, end):
+    """Trim a segment list to a time cap, and report the end it really covers.
+
+    A clip's name has to describe what is inside it. Truncating the segments
+    while keeping the *requested* end produced a file claiming sixteen hours
+    and holding ten minutes -- and the media browser files each still under the
+    first clip whose window contains it, so that one clip swallowed every still
+    of the day and the real clips showed none.
+
+    Returns (segments, end, capped).
+    """
+    limit = max(1, int(cap_s // max(1, segment_seconds)))
+    if len(segs) <= limit:
+        return segs, end, False
+    segs = segs[:limit]
+    last = parse_seg_start(segs[-1])
+    if last is not None:
+        end = last + dt.timedelta(seconds=segment_seconds)
+    return segs, end, True
