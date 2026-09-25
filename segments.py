@@ -97,3 +97,44 @@ def cap_window(segs, cap_s, segment_seconds, end):
     if last is not None:
         end = last + dt.timedelta(seconds=segment_seconds)
     return segs, end, True
+
+
+def split_window(segs, cap_s, segment_seconds, end, max_parts=288):
+    """Cut a long window into consecutive clips instead of throwing it away.
+
+    cap_window() keeps the first `cap_s` and drops the rest. That is the right
+    shape for a clip -- one enormous file is worse than two -- but "drop the
+    rest" was a data-loss bug, not a trim. On 2026-09-24 a latched PIR held one
+    incident open for four days; the window was 5976 segments, the cap kept the
+    first 10, and the remaining 5966 -- four days of footage, 56 GB -- were
+    left unreferenced and swept away by the keeper minutes later.
+
+    So: same cap per clip, but every segment ends up in *some* clip. Returns a
+    list of (segments, end) pairs, oldest first, each at most `cap_s` long and
+    each naming the end it really covers.
+
+    `max_parts` is a stop, not a policy: an unbounded recovery path that
+    creates a file per ten minutes of a runaway window is how a disk fills.
+    When it bites, the surplus is reported so the caller can say so out loud
+    rather than dropping it silently the way the old code did.
+    """
+    per = max(1, int(cap_s // max(1, segment_seconds)))
+    if len(segs) <= per:
+        return [(segs, end)], 0
+
+    parts = []
+    for i in range(0, len(segs), per):
+        if len(parts) >= max_parts:
+            return parts, len(segs) - i
+        chunk = segs[i:i + per]
+        last = parse_seg_start(chunk[-1])
+        # The final chunk stops where the window stops; the others stop where
+        # their own last segment does.
+        if i + per >= len(segs):
+            chunk_end = end
+        elif last is not None:
+            chunk_end = last + dt.timedelta(seconds=segment_seconds)
+        else:
+            chunk_end = end
+        parts.append((chunk, chunk_end))
+    return parts, 0

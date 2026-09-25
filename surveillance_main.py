@@ -257,43 +257,53 @@ def main(argv=None):
         # recovered window is not bounded at all -- and one enormous file is
         # worse than two, both to cut and to seek in.
         cap = float(cfg._get("capture", "max_clip_seconds", default=600.0))
-        from segments import cap_window, parse_seg_start
-        before = len(segs)
-        # `end` comes back trimmed too: the file must not claim a window it
-        # does not contain, or the browser files every still of the day under
-        # it and the real clips show none.
-        segs, end, capped = cap_window(segs, cap, cfg.segment_seconds, end)
-        if capped:
-            log.warning("window was %d segment(s); cutting the first %d "
-                        "(%.0fs cap) and dropping the rest -- the clip is "
-                        "named for what it holds, ending %s",
-                        before, len(segs), cap, end.strftime("%H:%M:%S"))
-        t0 = parse_seg_start(segs[0]) or start
-        day_dir = cfg.events_root / t0.strftime(DAY_FMT)
-        day_dir.mkdir(parents=True, exist_ok=True)
-        out = day_dir / (f"clip_{t0.strftime(TS_FMT)}"
-                         f"_{end.strftime(TS_FMT)}.mp4")
-        # The sources go only after the clip exists and passes validation.
+        max_parts = int(cfg._get("capture", "max_clips_per_window", default=288))
+        from segments import split_window, parse_seg_start
+        # A long window is SPLIT, not truncated. Keeping only the first ten
+        # minutes and letting the keeper sweep the rest cost four days of
+        # footage on 2026-09-24; every segment now lands in some clip.
+        parts, surplus = split_window(segs, cap, cfg.segment_seconds, end,
+                                      max_parts=max_parts)
+        if len(parts) > 1:
+            log.warning("window is %d segment(s); cutting it into %d clip(s) "
+                        "of at most %.0fs", len(segs), len(parts), cap)
+        if surplus:
+            log.error("the window did not fit in %d clips; %d segment(s) "
+                      "(%.1f h) are NOT in any clip and the keeper will "
+                      "reclaim them -- raise capture.max_clips_per_window",
+                      max_parts, surplus,
+                      surplus * cfg.segment_seconds / 3600.0)
+
         drop = bool(cfg._get("capture", "delete_sources_after_concat",
                              default=True))
-        log.info("cutting %d segment(s) into %s%s", len(segs), out.name,
-                 " (sources will be removed)" if drop else "")
-        concat_mgr.submit(ConcatJob(segs, out, delete_sources=drop))
+        first = None
+        for chunk, chunk_end in parts:
+            t0 = parse_seg_start(chunk[0]) or start
+            day_dir = cfg.events_root / t0.strftime(DAY_FMT)
+            day_dir.mkdir(parents=True, exist_ok=True)
+            out = day_dir / (f"clip_{t0.strftime(TS_FMT)}"
+                             f"_{chunk_end.strftime(TS_FMT)}.mp4")
+            log.info("cutting %d segment(s) into %s%s", len(chunk), out.name,
+                     " (sources will be removed)" if drop else "")
+            concat_mgr.submit(ConcatJob(chunk, out, delete_sources=drop))
 
-        # A sidecar recording when this file's first frame actually happened.
-        # The name carries it too, but the annotated companion starts later,
-        # and a player needs each file's own t0 to seek to a wall-clock moment.
-        try:
-            side = out.with_suffix(".json")
-            side.write_text(json.dumps({
-                "t0": t0.isoformat(timespec="seconds"),
-                "window_start": start.isoformat(timespec="seconds"),
-                "window_end": end.isoformat(timespec="seconds"),
-                "segments": len(segs),
-            }, indent=1))
-        except OSError as e:
-            log.warning("could not write the clip sidecar: %s", e)
-        return out
+            # A sidecar recording when this file's first frame actually
+            # happened. The name carries it too, but the annotated companion
+            # starts later, and a player needs each file's own t0 to seek to a
+            # wall-clock moment.
+            try:
+                side = out.with_suffix(".json")
+                side.write_text(json.dumps({
+                    "t0": t0.isoformat(timespec="seconds"),
+                    "window_start": start.isoformat(timespec="seconds"),
+                    "window_end": chunk_end.isoformat(timespec="seconds"),
+                    "segments": len(chunk),
+                }, indent=1))
+            except OSError as e:
+                log.warning("could not write the clip sidecar: %s", e)
+            if first is None:
+                first = out
+        return first
 
     def recover_open_incident():
         """Cut a clip for a window that was open when the process died.
@@ -389,8 +399,15 @@ def main(argv=None):
         limit_gb=u.get("limit_gb", 0),
         billing_day=u.get("billing_day", 1))
     if usage.iface:
-        log.info("metering data on %s%s", usage.iface,
-                 f", bundle {usage.limit_gb:g} GB" if usage.limit_gb else "")
+        # rknn-meter.timer keeps the counters fresh and rebuilds them if the
+        # site was rewired; nothing privileged happens in this process.
+        counting = ("only traffic that crosses the mobile link"
+                    if usage.wan and usage.wan.read() is not None
+                    else "every byte on the interface, including the wall "
+                         "panel -- run: sudo bash wan_meter.sh install")
+        log.info("metering data on %s%s: %s", usage.iface,
+                 f", bundle {usage.limit_gb:g} GB" if usage.limit_gb else "",
+                 counting)
 
     def usage_loop():
         while True:

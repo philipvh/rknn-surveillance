@@ -72,10 +72,30 @@ class FakeCamera:
         return self.calls.count(c)
 
 
+# The club board's routing table, so "which networks are free" is decided the
+# way it is in the field -- from the kernel -- instead of from a list in the
+# test config that could drift away from the real one.
+CLUB_ROUTE = (
+    "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask"
+    "\t\tMTU\tWindow\tIRTT\n"
+    "enP4p65s0\t00000000\t0108A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n"
+    "tun0\t0002080A\t0502080A\t0003\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+    "enP4p65s0\t0008A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0\n"
+    "tun0\t005AA8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+    "enx00606ed70c2a\t005BA8C0\t00000000\t0001\t0\t0\t0\t00FFFFFF\t0\t0\t0\n"
+    "wlxe84e067c38f9\t005CA8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0\n"
+)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         root = Path(self.tmp.name)
+        import netinfo
+        (root / "route").write_text(CLUB_ROUTE)
+        self._real_route = netinfo.PROC_ROUTE
+        netinfo.PROC_ROUTE = str(root / "route")
+        self.addCleanup(setattr, netinfo, "PROC_ROUTE", self._real_route)
         (root / "config.yaml").write_text(CFG.format(root=root))
         sec = root / "secrets.yaml"
         sec.write_text('camera:\n  password: "pw"\nweb:\n  password: "wpw"\n')
@@ -1218,9 +1238,10 @@ class TestUsageMeter(Base):
         (net / "tx_bytes").write_text("0")
         self.usage = DataUsage(Path(self.tmp.name) / "usage.json",
                                iface="wan0", limit_gb=5.0, billing_day=1,
-                               sys_net=str(Path(self.tmp.name) / "net"))
+                               sys_net=str(Path(self.tmp.name) / "net"),
+                               wan=False)   # the interface counter, on purpose
         self.usage._last_raw = 0            # pretend we have been watching
-        self.usage._last_iface = "wan0"
+        self.usage._last_iface = "wan0/iface"
         self.usage.sample()
         from settings import Settings
         self.store = Settings(Path(self.tmp.name) / "settings.json")
@@ -1338,6 +1359,19 @@ class TestMeteredLink(Base):
         self.assertIn(b'id="metered"', body,
                       "an unknown client was assumed free")
 
+    # The USB wifi adapter cannot carry video, so the wall panel was moved onto
+    # the 4G router's own LAN. That LAN is wiring inside the building -- the
+    # tablet's frames never touch the mobile link -- but the address looks
+    # foreign, and before it was listed the panel silently dropped to 1 fps at
+    # 480 wide and logged itself out every 15 minutes.
+    ROUTER_LAN = {"REMOTE_ADDR": "192.168.8.55"}
+
+    def test_the_wall_tablet_on_the_routers_lan_gets_the_full_picture(self):
+        body = self.c.get("/", headers=self.auth(),
+                          environ_base=self.ROUTER_LAN).data
+        self.assertNotIn(b'id="metered"', body)
+        self.assertIn(b'var showDetector = true', body)
+
 
 class TestDataOnTheMainScreen(Base):
     def setUp(self):
@@ -1347,11 +1381,14 @@ class TestDataOnTheMainScreen(Base):
         net.mkdir(parents=True)
         (net / "rx_bytes").write_text(str(2 * 1073741824))
         (net / "tx_bytes").write_text("0")
+        # wan=False: this test is about the panel showing a number, not about
+        # which counter it came from, and the real WanCounter would shell out.
         self.usage = DataUsage(Path(self.tmp.name) / "usage.json",
                                iface="wan0", limit_gb=30.0, billing_day=1,
-                               sys_net=str(Path(self.tmp.name) / "net"))
+                               sys_net=str(Path(self.tmp.name) / "net"),
+                               wan=False)
         self.usage._last_raw = 0
-        self.usage._last_iface = "wan0"
+        self.usage._last_iface = "wan0/iface"
         self.usage.sample()
         self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
                               schedule=self.sched, usage=self.usage)
@@ -1632,6 +1669,26 @@ class TestSessionOverHttp(Base):
         for path in ("/aim.mjpg", "/detect.mjpg"):
             r = c2.get(path, headers=self.auth(), environ_base=self.REMOTE)
             self.assertIn(r.status_code, (429, 503), path)
+
+    def test_the_wall_tablet_on_the_routers_lan_is_never_cut_off(self):
+        """Same exemption, the other piece of wiring in the building.
+
+        The panel was moved off the board's access point onto the 4G router's
+        LAN because the USB adapter cannot carry video. Same client throughout,
+        for the reason spelled out below.
+        """
+        ROUTER_LAN = {"REMOTE_ADDR": "192.168.8.55"}
+        c2 = self._tiny_session_app()
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=ROUTER_LAN)
+        self.assertEqual(r.status_code, 200)
+        r.response.close()
+        time.sleep(0.2)                      # well past the limit
+        r = c2.get("/stream.mjpg", headers=self.auth(),
+                   environ_base=ROUTER_LAN)
+        self.assertEqual(r.status_code, 200,
+                         "the wall panel on the router's LAN was cut off")
+        r.response.close()
 
     def test_a_local_viewer_is_never_cut_off(self):
         """The wall tablet keeps streaming past any session limit.

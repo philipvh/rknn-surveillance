@@ -24,11 +24,13 @@ import datetime as dt
 import json
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import datausage  # noqa: E402
 from datausage import DataUsage, default_interface  # noqa: E402
 
 GIB = 1073741824
@@ -210,3 +212,106 @@ class TestInterfaceDiscovery(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _published(tmp, text, age_s=0.0):
+    """A /run/rknn-meter as the timer would leave it."""
+    import os, time as _t
+    f = Path(tmp) / "rknn-meter"
+    f.write_text(text)
+    if age_s:
+        t = _t.time() - age_s
+        os.utime(f, (t, t))
+    return str(f)
+
+
+class TestWanCounter(unittest.TestCase):
+    """Only the bytes that crossed the mobile link should be billed.
+
+    The wall panel lives on the 4G router's LAN because the USB wifi adapter
+    cannot carry video, so its stream crosses the uplink NIC without ever
+    leaving the building -- about 0.8 GB an hour of phantom mobile data if the
+    interface counter is believed.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+
+    def test_it_adds_the_two_directions(self):
+        w = datausage.WanCounter(_published(self.tmp.name, "1000 2345\n"))
+        self.assertEqual(w.read(), 3345)
+
+    def test_a_missing_file_reports_nothing_rather_than_guessing(self):
+        w = datausage.WanCounter(str(Path(self.tmp.name) / "absent"))
+        self.assertIsNone(w.read())
+
+    def test_garbage_is_not_taken_as_a_number(self):
+        w = datausage.WanCounter(_published(self.tmp.name, "banana\n"))
+        self.assertIsNone(w.read())
+
+    def test_a_stale_file_is_refused_rather_than_frozen(self):
+        """If the timer dies the counter stops moving. Reporting that as
+        'no data used' would be worse than over-reporting."""
+        w = datausage.WanCounter(_published(self.tmp.name, "9 9\n", age_s=3600))
+        self.assertIsNone(w.read())
+
+    def test_a_fresh_file_just_under_the_limit_is_accepted(self):
+        w = datausage.WanCounter(_published(self.tmp.name, "9 9\n", age_s=60),
+                                 stale_s=300)
+        self.assertEqual(w.read(), 18)
+
+    def test_it_warns_once_per_cause_not_once_per_sample(self):
+        w = datausage.WanCounter(str(Path(self.tmp.name) / "absent"))
+        with self.assertLogs("usage", level="WARNING") as got:
+            for _ in range(10):
+                w.read()
+        self.assertEqual(len(got.records), 1)
+
+    def test_it_says_so_when_the_meter_comes_back(self):
+        path = str(Path(self.tmp.name) / "later")
+        w = datausage.WanCounter(path)
+        w.read()                                  # missing: warns
+        Path(path).write_text("4 4\n")
+        with self.assertLogs("usage", level="INFO") as got:
+            self.assertEqual(w.read(), 8)
+        self.assertTrue(any("readable again" in r.getMessage()
+                            for r in got.records))
+
+
+class TestSamplerPrefersTheWanCounter(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.path = Path(self.tmp.name) / "usage.json"
+
+    def _usage(self, wan):
+        net = FakeNet(Path(self.tmp.name) / "net")
+        net.set(10 ** 9, 10 ** 9)           # a big interface counter to ignore
+        return datausage.DataUsage(self.path, iface="wan0", wan=wan,
+                                   sys_net=str(Path(self.tmp.name) / "net"))
+
+    def test_the_wan_counter_wins_when_it_is_available(self):
+        path = _published(self.tmp.name, "100 100\n")
+        u = self._usage(datausage.WanCounter(path))
+        u.sample()                          # first sample only sets the base
+        Path(path).write_text("300 300\n")
+        self.assertEqual(u.sample(), 400,
+                         "it billed the interface counter, not the uplink one")
+
+    def test_it_falls_back_to_the_interface_when_the_meter_is_gone(self):
+        wan = datausage.WanCounter(str(Path(self.tmp.name) / "absent"))
+        u = self._usage(wan)
+        self.assertEqual(u.sample(), 0)     # base
+        self.assertEqual(u._source, "iface")
+
+    def test_switching_source_does_not_invent_traffic(self):
+        """The two counters measure different things; a delta across the
+        switch would book the whole of one as if it had just been used."""
+        path = _published(self.tmp.name, "5 5\n")
+        u = self._usage(datausage.WanCounter(path))
+        u.sample()                          # base, from the wan counter
+        Path(path).unlink()                 # the timer stopped
+        added = u.sample()                  # falls back to the interface
+        self.assertEqual(added, 0,
+                         "a billion interface bytes were booked as new usage")

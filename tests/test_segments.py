@@ -27,6 +27,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+import segments  # noqa: E402
 from segments import cap_window  # noqa: E402
 
 DAY = dt.datetime(2026, 9, 25)
@@ -85,3 +86,60 @@ class TestCapWindow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSplitWindowKeepsEverything(unittest.TestCase):
+    """The 2026-09-24 data loss: a four-day window, ten minutes kept.
+
+    cap_window() is still the right answer for naming a single clip, but the
+    caller must not throw the remainder away. These pin the property that
+    matters: every segment handed in comes back out in exactly one clip.
+    """
+
+    def _segs(self, minutes, day="2026-09-20"):
+        return [f"/t/{day}/{m // 60:02d}-{m % 60:02d}-00.mp4"
+                for m in range(minutes)]
+
+    def test_a_window_under_the_cap_stays_one_clip(self):
+        segs = self._segs(7)
+        end = dt.datetime(2026, 9, 20, 0, 7, 0)
+        parts, surplus = segments.split_window(segs, 600.0, 60, end)
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(surplus, 0)
+        self.assertEqual(parts[0], (segs, end))
+
+    def test_no_segment_is_dropped(self):
+        segs = self._segs(180)                      # three hours
+        end = dt.datetime(2026, 9, 20, 3, 0, 0)
+        parts, surplus = segments.split_window(segs, 600.0, 60, end)
+        self.assertEqual(surplus, 0)
+        rebuilt = [s for chunk, _ in parts for s in chunk]
+        self.assertEqual(rebuilt, segs, "every segment must land in one clip")
+        self.assertEqual(len(parts), 18)
+
+    def test_each_clip_is_named_for_what_it_holds(self):
+        segs = self._segs(25)
+        end = dt.datetime(2026, 9, 20, 0, 25, 0)
+        parts, _ = segments.split_window(segs, 600.0, 60, end)
+        for chunk, chunk_end in parts:
+            first = segments.parse_seg_start(chunk[0])
+            held = (chunk_end - first).total_seconds()
+            self.assertLessEqual(held, 600.0)
+            self.assertAlmostEqual(held, len(chunk) * 60, delta=1)
+
+    def test_the_four_day_window_would_have_been_kept(self):
+        """5976 segments is what the real incident held."""
+        segs = [f"/t/d/{i}.mp4" for i in range(5976)]
+        end = dt.datetime(2026, 9, 24, 21, 1, 20)
+        parts, surplus = segments.split_window(segs, 600.0, 60, end,
+                                               max_parts=1000)
+        self.assertEqual(surplus, 0)
+        self.assertEqual(sum(len(c) for c, _ in parts), 5976)
+
+    def test_max_parts_reports_the_surplus_instead_of_hiding_it(self):
+        segs = self._segs(180)
+        end = dt.datetime(2026, 9, 20, 3, 0, 0)
+        parts, surplus = segments.split_window(segs, 600.0, 60, end,
+                                               max_parts=5)
+        self.assertEqual(len(parts), 5)
+        self.assertEqual(surplus, 180 - 50)

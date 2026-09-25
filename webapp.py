@@ -30,6 +30,8 @@ import functools
 import hashlib
 import hmac
 import ipaddress
+
+from netinfo import AttachedNetworks
 import json
 import logging
 import os
@@ -182,16 +184,20 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
     # aiming feed over 3. So the streams ask who is watching and serve a
     # smaller, slower picture to anyone who is not local. Measured on the club
     # board after a 5 GB bundle went in a day, 92% of it remote viewing.
-    _LOCAL_DEFAULT = ["127.0.0.0/8", "192.168.91.0/24", "192.168.92.0/24"]
+    # Not a hardcoded list. The kernel knows which subnets are on the wire and
+    # which are down the tunnel, and it stays right when the site is rewired or
+    # the router hands out a different address. web.local_networks is still
+    # honoured, for a site whose free networks are not all directly attached.
+    _attached = AttachedNetworks()
 
     def _local_networks():
-        raw = web.get("local_networks") or _LOCAL_DEFAULT
-        nets = []
-        for item in raw:
+        nets = [ipaddress.ip_network("127.0.0.0/8")]
+        for item in (web.get("local_networks") or []):
             try:
                 nets.append(ipaddress.ip_network(str(item).strip(), strict=False))
             except ValueError:
                 log.warning("web.local_networks: %r is not a network", item)
+        nets.extend(_attached.get())
         return nets
 
     def is_remote():

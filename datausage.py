@@ -40,6 +40,7 @@ import logging
 import os
 import tempfile
 import threading
+import time
 
 log = logging.getLogger("usage")
 
@@ -79,16 +80,88 @@ def _counter(iface, sys_net=SYS_NET):
     return total
 
 
+class WanCounter:
+    """Bytes across the uplink, ignoring what never leaves the site.
+
+    /sys/class/net/<if>/statistics counts every frame on the NIC, which was the
+    right measure while the wall panel hung off the board's own access point:
+    its video never touched the uplink. The USB adapter cannot carry video, so
+    the panel moved onto the 4G router's LAN, and now every frame it pulls
+    crosses the uplink NIC on its way to a tablet ten metres away -- about
+    0.8 GB an hour of "mobile data" that never went near the mobile network.
+
+    wan_meter.sh puts iptables counters on the uplink that skip every
+    directly-attached subnet. Reading them needs root, and this service runs
+    with NoNewPrivileges, so it cannot sudo and should not be given the chance:
+    a systemd timer publishes the two numbers to a file as root, and all that
+    happens here is a read.
+
+    A file that is missing or has gone stale reports None and the caller falls
+    back to the interface counter. That direction is deliberate -- over-
+    reporting is a bad measurement, but a meter frozen at the moment the timer
+    died would quietly report that nothing is being used at all.
+    """
+
+    PUBLISHED = "/run/rknn-meter"
+    STALE_S = 300.0
+
+    def __init__(self, path=None, stale_s=None, clock=time.time):
+        self.path = path or self.PUBLISHED
+        self.stale_s = self.STALE_S if stale_s is None else float(stale_s)
+        self._clock = clock
+        self._warned = None
+
+    def read(self):
+        """(in + out) bytes counted on the uplink, or None if unavailable."""
+        try:
+            st = os.stat(self.path)
+            with open(self.path, "r", encoding="utf-8") as fh:
+                parts = fh.read().split()
+        except (OSError, ValueError):
+            return self._unavailable(
+                "%s is not there -- run: sudo bash wan_meter.sh install"
+                % self.path)
+        age = self._clock() - st.st_mtime
+        if age > self.stale_s:
+            return self._unavailable(
+                "%s has not been updated for %.0fs; is rknn-meter.timer "
+                "running?" % (self.path, age))
+        if len(parts) < 2:
+            return self._unavailable("%s holds %r" % (self.path, parts))
+        try:
+            total = sum(int(x) for x in parts[:2])
+        except ValueError:
+            return self._unavailable("%s holds %r" % (self.path, parts))
+        if self._warned is not None:
+            log.info("the uplink meter is readable again; counting only "
+                     "traffic that crosses the mobile link")
+            self._warned = None
+        return total
+
+    def _unavailable(self, why):
+        # One line per distinct cause, not one per sample.
+        if self._warned != why:
+            self._warned = why
+            log.warning("counting every byte on the uplink instead of only "
+                        "the ones that cost money, so traffic to the wall "
+                        "panel is billed as mobile data: %s", why)
+        return None
+
+
 class DataUsage:
     """Daily byte totals for the metered uplink, kept across restarts."""
 
     KEEP_DAYS = 120
 
     def __init__(self, path, iface=None, limit_gb=0.0, billing_day=1,
-                 sys_net=SYS_NET, clock=None, today=None):
+                 sys_net=SYS_NET, clock=None, today=None, wan=None):
         self.path = path
         self._iface = iface
         self.sys_net = sys_net
+        # Prefer the counter that knows the difference between a byte that
+        # crossed the mobile link and one that went to the tablet on the wall.
+        self.wan = WanCounter() if wan is None else wan
+        self._source = None
         self.limit_gb = float(limit_gb or 0.0)
         self.billing_day = max(1, min(int(billing_day or 1), 28))
         self._today = today or (lambda: dt.date.today())
@@ -149,12 +222,26 @@ class DataUsage:
         iface = self.iface
         if not iface:
             return 0
-        raw = _counter(iface, self.sys_net)
+        raw, source = None, "wan"
+        if self.wan:
+            raw = self.wan.read()
+        if raw is None:
+            raw, source = _counter(iface, self.sys_net), "iface"
         if raw is None:
             return 0
+        if source != self._source:
+            if self._source is not None:
+                log.info("the uplink counter changed source (%s -> %s); "
+                         "not counting its history as though it just happened",
+                         self._source, source)
+            self._source = source
         with self._lock:
             prev, prev_iface = self._last_raw, self._last_iface
-            if prev is None or prev_iface != iface:
+            # The source is part of the identity: the two counters measure
+            # different things, so carrying a delta across a switch between
+            # them would invent traffic.
+            prev_key = "%s/%s" % (iface, source)
+            if prev is None or prev_iface != prev_key:
                 # First ever sample, or the uplink changed. Do not count the
                 # counter's whole history as though it happened just now.
                 delta = 0
@@ -167,7 +254,7 @@ class DataUsage:
             else:
                 delta = raw - prev
             self._last_raw = raw
-            self._last_iface = iface
+            self._last_iface = prev_key
             if delta:
                 key = self._today().isoformat()
                 self._days[key] = self._days.get(key, 0) + delta

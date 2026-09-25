@@ -194,13 +194,25 @@ def apply(deletions, dry_run=False):
     return freed
 
 
-def prune_empty_dirs(tiers):
-    """Tidy up day directories left behind. Never removes a tier root."""
+def prune_empty_dirs(tiers, now=None):
+    """Tidy up day directories left behind. Never removes a tier root.
+
+    Never removes today's or tomorrow's directory either, empty or not. The
+    recorder creates tomorrow's ahead of time because ffmpeg's segment muxer
+    will not create it and exits the moment the date rolls over; a sweep that
+    deleted the empty directory it had just been handed turned midnight into a
+    coin toss, and the nights it lost -- 23 and 24 September 2026 among them --
+    have no footage at all.
+    """
+    now = time.time() if now is None else now
+    keep = {time.strftime("%Y-%m-%d", time.localtime(now + o))
+            for o in (0, 86400)}
     for t in tiers:
         if not t.path.exists():
             continue
         for p in sorted(t.path.rglob("*"), key=lambda q: len(q.parts), reverse=True):
-            if p.is_dir() and p != t.path and not any(p.iterdir()):
+            if p.is_dir() and p != t.path and p.name not in keep \
+                    and not any(p.iterdir()):
                 try:
                     p.rmdir()
                 except OSError:
@@ -222,7 +234,7 @@ def run_once(cfg, pinned=frozenset(), dry_run=False, now=None):
     )
     freed = apply(deletions, dry_run=dry_run)
     if not dry_run:
-        prune_empty_dirs(tiers)
+        prune_empty_dirs(tiers, now=now)
     for w in warnings:
         log.error("%s", w)
     if deletions:

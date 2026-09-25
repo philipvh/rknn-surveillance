@@ -246,3 +246,56 @@ class TestFullDiskTakesTheOldestProtected(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestPruneEmptyDirsSparesTomorrow(unittest.TestCase):
+    """The recorder pre-creates tomorrow's day directory because ffmpeg's
+    segment muxer will not; a sweep that deleted it again made recording stop
+    at midnight. 23 and 24 September 2026 have no footage because of this."""
+
+    def setUp(self):
+        import tempfile
+        from retention import prune_empty_dirs
+        self.prune = prune_empty_dirs
+        self.tmp = tempfile.mkdtemp()
+        self.root = Path(self.tmp) / "main"
+        self.root.mkdir()
+
+        class _T:
+            def __init__(self, path):
+                self.path = path
+                self.name = "main"
+        self.tiers = [_T(self.root)]
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _day(self, offset):
+        return time.strftime("%Y-%m-%d", time.localtime(NOW + offset))
+
+    def test_tomorrows_empty_directory_survives(self):
+        d = self.root / self._day(DAY)
+        d.mkdir()
+        self.prune(self.tiers, now=NOW)
+        self.assertTrue(d.is_dir(),
+                        "deleting tomorrow's directory stops ffmpeg at midnight")
+
+    def test_todays_empty_directory_survives(self):
+        d = self.root / self._day(0)
+        d.mkdir()
+        self.prune(self.tiers, now=NOW)
+        self.assertTrue(d.is_dir())
+
+    def test_an_old_empty_directory_is_still_tidied_away(self):
+        d = self.root / self._day(-30 * DAY)
+        d.mkdir()
+        self.prune(self.tiers, now=NOW)
+        self.assertFalse(d.exists(), "the tidy-up must still do its job")
+
+    def test_a_directory_with_footage_in_it_is_never_touched(self):
+        d = self.root / self._day(-30 * DAY)
+        d.mkdir()
+        (d / "12-00-00.mp4").write_bytes(b"x")
+        self.prune(self.tiers, now=NOW)
+        self.assertTrue(d.is_dir())
