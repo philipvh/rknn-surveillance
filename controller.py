@@ -113,6 +113,12 @@ class Controller:
         self.return_timeout_s = float(c.get("return_timeout_s", 30.0))
         self.pir_required_to_scan = bool(c.get("pir_required_to_scan", True))
         self.sweep_retry_s = float(c.get("sweep_retry_s", 120.0))
+        # A line held this long with nothing else triggering is stuck, not
+        # motion, and must stop holding an incident open.
+        self.pir_stuck_s = float(c.get("pir_stuck_s", 1800.0))
+        # No incident may run for ever. Four days of one "incident" is not a
+        # long event, it is a bug with the brakes off.
+        self.max_incident_s = float(c.get("max_incident_s", 3600.0))
 
         t = (cfg._get("trigger", default={}) or {})
         self.pre_roll_s = float(t.get("pre_roll_s", 2.0))
@@ -135,6 +141,9 @@ class Controller:
         # once a second, which moves nothing and floods the journal.
         self._sweep_blocked_until = 0.0
         self._pir_active = False
+        self._pir_active_since = None   # when the line last went active
+        self._scan_requested = False    # a scan asked for from the panel
+        self._incident_started_at = None
         self._pir_last_release = None
         self._pir_last_duration = 0.0
 
@@ -187,9 +196,12 @@ class Controller:
     def on_pir(self, ev):
         with self._lock:
             if ev.kind == "active":
+                if not self._pir_active:
+                    self._pir_active_since = self._clock()
                 self._pir_active = True
             elif ev.kind == "inactive":
                 self._pir_active = False
+                self._pir_active_since = None
                 self._pir_last_release = self._clock()
                 self._pir_last_duration = ev.duration
                 if self._incident:
@@ -197,6 +209,7 @@ class Controller:
             elif ev.kind == "stuck":
                 # A stuck line must not hold the camera scanning all night.
                 self._pir_active = False
+                self._pir_active_since = None
                 log.warning("ignoring a stuck PIR line as a trigger")
                 return
 
@@ -231,6 +244,7 @@ class Controller:
         Caller must hold the lock.
         """
         self._incident = Incident(first_seen=when, last_seen=when)
+        self._incident_started_at = self._clock()
         log.info("incident opened at %s (%s)", when.strftime("%H:%M:%S"), source)
         if self.annotated is not None:
             self.annotated.start()
@@ -297,6 +311,25 @@ class Controller:
         elif self._state is State.HOLDING:
             self._entered_at = self._entered_at   # keep hold start for max_hold
 
+    def request_scan(self):
+        """A scan asked for from the wall panel.
+
+        Deliberately NOT modelled as a PIR event. The panel used to inject a
+        fake 'active' with no matching release, which latched _pir_active for
+        good: after that no incident could ever close, one stayed open four
+        days, no clips were cut, and every recorded minute was kept. A request
+        is a request -- it must not impersonate a sensor whose release nobody
+        is going to send.
+        """
+        with self._lock:
+            self._last_trigger_at = self._clock()
+            self._scan_requested = True
+            if self._incident is None:
+                self._open_incident(self._wall(), "panel")
+        if self._state in (State.PARKED, State.RETURNING):
+            self._go(State.SETTLING, "scan requested from the panel")
+        return True
+
     def on_manual(self, active=True):
         """The wall panel took or released control."""
         if active:
@@ -323,7 +356,30 @@ class Controller:
         return ""
 
     # ------------------------------------------------------------------- tick
+    def _enforce_incident_cap(self):
+        """No incident may run for ever, in any state.
+
+        The quiet period is the normal terminator and the states have their own
+        caps, but nothing bounded the window itself: one ran for four days and
+        produced a single clip named across them. A window this long is not a
+        long event, it is a stuck one -- so it is closed, and genuine ongoing
+        activity simply opens the next.
+        """
+        with self._lock:
+            open_ = self._incident is not None
+            started = self._incident_started_at
+        if not open_ or started is None:
+            return
+        age = self._clock() - started
+        if age >= self.max_incident_s:
+            log.warning("incident has been open %.0fs, past the %.0fs cap; "
+                        "closing it so the clip is cut", age, self.max_incident_s)
+            self._close_incident("reached the maximum incident length")
+
     def tick(self):
+        # Before anything else: a window that has run away is closed whatever
+        # state the camera is in.
+        self._enforce_incident_cap()
         st = self.state
         handler = getattr(self, f"_tick_{st.value}", None)
         if handler:
@@ -340,13 +396,38 @@ class Controller:
         self._expire_idle_incident()
 
     def _expire_idle_incident(self):
+        """Close a window nothing has refreshed for the quiet period.
+
+        An active PIR normally vetoes this: a held line means the event is
+        still happening. But a veto with no expiry is how a panel "Scan now" --
+        which injected an 'active' that nobody ever released -- held one
+        incident open for four days, cut no clips, and kept every recorded
+        minute on disk. So the veto expires: after pir_stuck_s of continuous
+        activation the ordinary rule applies again.
+
+        Safe for a real line still seeing motion, because motion means
+        detections and every detection refreshes _last_trigger_at -- a busy
+        scene keeps its window open on its own merits. Only a line held while
+        nothing at all is happening loses the veto, which is the definition of
+        stuck.
+        """
         with self._lock:
             open_ = self._incident is not None
             last = self._last_trigger_at
             pir = self._pir_active
-        if not open_ or pir or last is None:
+            since = self._pir_active_since
+        if not open_ or last is None:
             return
-        if (self._clock() - last) >= self.quiet_period_s:
+        quiet = (self._clock() - last) >= self.quiet_period_s
+        if pir:
+            held = self._clock() - since if since is not None else 0.0
+            if held < self.pir_stuck_s:
+                return
+            if quiet:
+                log.warning("the PIR has read active for %.0fs with nothing "
+                            "triggering; treating it as stuck so the incident "
+                            "can close", held)
+        if quiet:
             self._close_incident("no trigger for the quiet period")
 
     # ------------------------------------------------------------------ sweep
@@ -375,9 +456,12 @@ class Controller:
         # Let the floodlights come up and the camera's exposure catch up.
         if self._elapsed() < self.lights_settle_s:
             return
-        if self.pir_required_to_scan and not self._pir_active:
+        if (self.pir_required_to_scan and not self._pir_active
+                and not self._scan_requested):
             self._go(State.PARKED, "PIR released before the scan began")
             return
+        # One request, one scan.
+        self._scan_requested = False
         # A trigger-sweep covers a scene wider than one view by oscillating
         # between two saved positions for as long as the trigger persists. It
         # takes precedence over both the preset patrol and the fixed-camera

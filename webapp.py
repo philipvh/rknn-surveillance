@@ -1405,7 +1405,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
     def api_scan():
         if controller is None:
             abort(503)
-        controller.on_pir(_FakePir())
+        controller.request_scan()
         return jsonify(ok=True)
 
     @app.route("/api/arm", methods=["POST"])
@@ -1466,12 +1466,6 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
 
     return app
 
-
-class _FakePir:
-    kind = "active"
-    at = 0.0
-    duration = 0.0
-    detail = "requested from the wall panel"
 
 
 # ------------------------------------------------------------------ helpers

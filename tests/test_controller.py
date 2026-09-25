@@ -826,3 +826,108 @@ class TestTriggerSweep(unittest.TestCase):
         self.advance(2.0)
         # a refused move must not leave it wedged in SWEEPING
         self.assertIn(self.c.state, (State.RETURNING, State.PARKED))
+
+
+class TestStuckPirCannotHoldAnIncidentForever(Base):
+    """The failure this exists for, in full.
+
+    The panel's "Scan now" injected a PIR 'active' that nothing ever released.
+    _pir_active latched, _expire_idle_incident vetoed every close, and one
+    incident stayed open four days: no clips cut, every recorded minute kept,
+    263 stills and no video for the day.
+    """
+
+    def test_a_latched_line_cannot_hold_a_parked_incident_open(self):
+        """The real failure, reproduced where it actually happened.
+
+        State parked, window open, PIR latched by a panel scan that never
+        released. _tick_parked -> _expire_idle_incident is the only thing that
+        can close a window there, and its PIR veto had no expiry.
+
+        An earlier version of this test drove the camera to HOLDING instead,
+        where _tick_holding closes on max_hold_s regardless of the PIR -- so it
+        passed with the bug fully restored. It tested nothing.
+        """
+        self.pir("active")                 # latches the line, opens a window
+        self.advance(1.0)
+        self.c._go(State.PARKED, "test: parked with the window still open")
+        self.assertIsNotNone(self.c._incident)
+        self.advance(self.c.pir_stuck_s + self.c.quiet_period_s + 30.0)
+        self.assertIsNone(self.c._incident,
+                          "a latched PIR held a parked incident open for ever")
+
+    def test_a_recent_trigger_still_protects_the_window(self):
+        # The guard must only bite when nothing is happening. Reaching into
+        # _last_trigger_at keeps the camera parked so the veto path is the one
+        # under test, rather than a state change closing the window for us.
+        self.pir("active")
+        self.advance(1.0)
+        self.c._go(State.PARKED, "test")
+        # The trigger has to stay fresh THROUGHOUT, not just at the end: go
+        # quiet for a whole quiet period while the line looks stuck and the
+        # guard is entitled to close, which is what it is for.
+        for _ in range(int((self.c.pir_stuck_s + 120) / 10)):
+            self.c._last_trigger_at = self.c._clock()
+            self.advance(10.0)
+        self.assertIsNotNone(self.c._incident,
+                             "the window closed while a trigger was recent")
+
+    def test_a_briefly_held_line_still_vetoes_normally(self):
+        self.pir("active")
+        self.advance(1.0)
+        self.c._go(State.PARKED, "test")
+        self.advance(self.c.quiet_period_s + 5.0)   # well short of pir_stuck_s
+        self.assertIsNotNone(self.c._incident,
+                             "a normally-held PIR lost its veto too early")
+
+
+class TestIncidentLengthIsCapped(Base):
+    def test_an_incident_cannot_run_for_ever(self):
+        # One ran for 358492s and produced a single clip named across four days.
+        self.c.max_incident_s = 120.0
+        self.pir("active")
+        self.see()
+        self.advance(5.0)
+        self.assertIsNotNone(self.c._incident)
+        for _ in range(30):          # keep it "busy" so quiet never closes it
+            self.see()
+            self.advance(5.0)
+        # It must have been cut at least once. Genuine ongoing activity then
+        # opens the NEXT window -- which is the point: a run of bounded clips,
+        # not one recording named across four days.
+        self.assertGreaterEqual(self.c.incidents_closed, 1,
+                                "a busy incident ran past its cap unbounded")
+
+    def test_the_cap_cuts_a_clip_rather_than_discarding_it(self):
+        self.c.max_incident_s = 60.0
+        self.pir("active")
+        self.see()
+        for _ in range(20):
+            self.see()
+            self.advance(5.0)
+        self.assertTrue(self.clips, "the capped incident produced no clip")
+
+
+class TestPanelScanRequest(Base):
+    """A scan asked for from the panel must not impersonate a sensor."""
+
+    def test_it_does_not_latch_the_pir(self):
+        self.c.request_scan()
+        self.advance(3.0)
+        self.assertFalse(self.c._pir_active,
+                         "the panel scan latched the PIR line again")
+
+    def test_it_still_opens_a_window_and_starts_a_scan(self):
+        self.c.request_scan()
+        self.assertIsNotNone(self.c._incident)
+        self.advance(3.0)
+        self.assertIn(self.c.state,
+                      (State.SCANNING, State.SWEEPING, State.HOLDING))
+
+    def test_the_incident_it_opens_can_still_close(self):
+        # The whole point: a panel scan must not make a window immortal.
+        self.c.request_scan()
+        self.advance(3.0)
+        self.advance(self.c.quiet_period_s + 30.0)
+        self.assertIsNone(self.c._incident,
+                          "an incident opened by the panel never closed")
