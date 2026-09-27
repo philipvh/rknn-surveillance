@@ -406,6 +406,36 @@ class Settings:
                     (" for " + ", ".join(str(n) for n in nets)) if nets else "")
         return nets
 
+    # ----------------------------------------------------- protecting setup
+    # Trusted networks exist so the wall panel is not a password prompt. That
+    # is right for watching, and wrong for changing things: the tablet hangs
+    # in a club room anyone can walk into, and from the settings pages you can
+    # add a forward, open the panel to everybody, or set a new password. This
+    # splits the two -- trusted to watch, credentials to change.
+    def protect_settings(self):
+        return bool(self.get("protect_settings", False))
+
+    def set_protect_settings(self, on, have_password=True):
+        """Turn it on or off.
+
+        Refuses to turn on when nothing can satisfy the prompt it would
+        create; otherwise the first thing it locks you out of is the screen
+        where you would set the password. settings_cli.py is the way back
+        either way, and it says so.
+        """
+        on = bool(on)
+        if on and not have_password:
+            raise ValueError(
+                "set a panel password first, or this would lock the settings "
+                "with no way to answer the prompt")
+        with self._lock:
+            if on:
+                self._data["protect_settings"] = True
+            else:
+                self._data.pop("protect_settings", None)
+            self._save()
+        return on
+
     # ------------------------------------------------------------- forwards
     # A device's own web UI, published on a board port. The obvious way is an
     # iptables DNAT, and camera_ui.sh does exactly that -- but it only works by
@@ -551,7 +581,9 @@ class Settings:
 
     def clear_access(self):
         with self._lock:
-            changed = False
+            # Whatever else "forget the access settings" means, it has to mean
+            # you can reach the settings again.
+            changed = self._data.pop("protect_settings", None) is not None
             for k in ("web_auth_mode", "web_trusted_networks"):
                 if k in self._data:
                     del self._data[k]

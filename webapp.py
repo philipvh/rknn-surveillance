@@ -140,11 +140,22 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             return settings.auth_mode
         return "password" if cfg.web_auth_required else "open"
 
-    def check_auth():
-        mode = _auth_mode()
-        if mode == "open":
+    def _have_password():
+        """Is there anything a password prompt could be answered with?"""
+        if settings is not None and settings.has_credentials():
             return True
-        if mode == "trusted" and settings is not None:
+        return bool(cfg.web_password)
+
+    def check_auth(area=None):
+        mode = _auth_mode()
+        # The settings pages can be held back even where watching is free: the
+        # wall tablet is in a room anyone can walk into, and from here you can
+        # add a forward, open the panel to everybody, or set a new password.
+        strict = (area == "settings" and settings is not None
+                  and settings.protect_settings() and _have_password())
+        if mode == "open" and not strict:
+            return True
+        if mode == "trusted" and not strict and settings is not None:
             # remote_addr is the real client here: the panel is served
             # directly, with no proxy in front of it. Behind one this would be
             # the proxy's address and the check would let the world in, which
@@ -174,6 +185,20 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         @functools.wraps(fn)
         def wrapper(*a, **kw):
             if not check_auth():
+                return _unauthorised(cfg.site_name)
+            return fn(*a, **kw)
+        return wrapper
+
+    def protected_settings(fn):
+        """As protected, but honours the settings-only password.
+
+        Deliberately still falls back to open/trusted when no password exists:
+        a toggle that locks the only screen able to unlock it is a trap, and
+        the guard in set_protect_settings is belt to this braces.
+        """
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            if not check_auth(area="settings"):
                 return _unauthorised(cfg.site_name)
             return fn(*a, **kw)
         return wrapper
@@ -477,7 +502,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return list(LIKELY)
 
     @app.route("/settings", methods=["GET", "POST"])
-    @protected
+    @protected_settings
     def settings_page():
         known = _model_classes()
         saved = ""
@@ -507,6 +532,9 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             cur_user=_current_user(), from_panel=_creds_from_panel(),
             cred_err="", cred_msg="", acc_err="", acc_msg="",
             mode=_auth_mode(),
+            protect_settings=(settings is not None
+                              and settings.protect_settings()),
+            have_password=_have_password(),
             mode_from_panel=(settings is not None and bool(settings.auth_mode)),
             networks=", ".join(str(n) for n in settings.trusted_networks)
                      if settings is not None else "",
@@ -606,7 +634,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return settings is not None and settings.has_credentials()
 
     @app.route("/settings/credentials", methods=["GET", "POST"])
-    @protected
+    @protected_settings
     def settings_credentials():
         err = msg = ""
         if request.method == "POST":
@@ -755,7 +783,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return sorted(out, key=lambda d: tuple(int(x) for x in d["ip"].split(".")))
 
     @app.route("/settings/forwarding", methods=["GET", "POST"])
-    @protected
+    @protected_settings
     def settings_forwarding():
         err = msg = ""
         if request.method == "POST":
@@ -788,7 +816,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return _settings_page("forwarding", fwd_err=err, fwd_msg=msg)
 
     @app.route("/settings/wifi", methods=["GET", "POST"])
-    @protected
+    @protected_settings
     def settings_wifi():
         radio = WiFi()
         err = msg = ""
@@ -843,7 +871,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                               wifi_available=radio.available)
 
     @app.route("/settings/system", methods=["GET", "POST"])
-    @protected
+    @protected_settings
     def settings_system():
         err = msg = ""
         ov = settings.config_overrides if settings is not None else {}
@@ -903,7 +931,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return bool(os.environ.get("INVOCATION_ID"))
 
     @app.route("/settings/restart", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_restart():
         if not _under_systemd():
             return _settings_page(
@@ -925,7 +953,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                                back=url_for("settings_system"))
 
     @app.route("/settings/system/reset", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_system_reset():
         if settings is None:
             abort(503)
@@ -933,14 +961,17 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return redirect(url_for("settings_system"))
 
     @app.route("/settings/access", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_access():
         if settings is None:
             abort(503)
         mode = (request.form.get("mode") or "").strip()
         nets = request.form.get("networks") or ""
+        want_strict = request.form.get("protect_settings") == "1"
         try:
             settings.set_auth_mode(mode, nets)
+            settings.set_protect_settings(want_strict,
+                                          have_password=_have_password())
         except ValueError as e:
             return _settings_page("credentials",
                                   acc_err=str(e)[0].upper() + str(e)[1:] + ".")
@@ -948,7 +979,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return _settings_page("credentials", acc_msg=mode)
 
     @app.route("/settings/access/reset", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_access_reset():
         if settings is None:
             abort(503)
@@ -957,7 +988,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return redirect(url_for("settings_credentials"))
 
     @app.route("/settings/credentials/reset", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_credentials_reset():
         """Go back to the user and password from the config and secrets file."""
         if settings is None:
@@ -967,7 +998,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return redirect(url_for("settings_credentials"))
 
     @app.route("/settings/reset", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_reset():
         """Drop the override so config.yaml applies again."""
         if settings is None:
@@ -1430,7 +1461,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                        remaining_s=_sessions.remaining(_session_key()))
 
     @app.route("/settings/datasaver", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_datasaver():
         if settings is None:
             abort(503)
@@ -1441,7 +1472,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return _settings_page("system", sys_msg="Data saver setting saved.")
 
     @app.route("/settings/sweep", methods=["POST"])
-    @protected
+    @protected_settings
     def settings_sweep():
         """The settings-screen half: the enable toggle and the dwell time.
 

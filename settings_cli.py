@@ -68,6 +68,10 @@ def cmd_show(cfg, s, args):
         d = "a password is required" if cfg.web_auth_required else "no password"
         print(f"access         from config.yaml: {d}")
 
+    if s.protect_settings():
+        print("settings       password required even from a trusted network"
+              "   ['protect off' undoes this]")
+
     if s.has_credentials():
         print(f"login          {s.web_user!r}   [set from the panel, PBKDF2]")
     else:
@@ -100,6 +104,23 @@ def cmd_passwd(cfg, s, args):
         return 1
     print(f"Login set to {user!r}. The running service will use it within a "
           f"second.")
+    return 0
+
+
+def cmd_protect(cfg, s, args):
+    """The way back in when the settings pages have locked themselves."""
+    on = args.state == "on"
+    have = bool(s.has_credentials()) or bool(cfg.web_password)
+    try:
+        s.set_protect_settings(on, have_password=have)
+    except ValueError as e:
+        print(f"{e}; nothing changed.", file=sys.stderr)
+        return 1
+    if on:
+        print("The settings pages now ask for the password even from a "
+              "trusted network. Watching is unchanged.")
+    else:
+        print("The settings pages follow the access mode again.")
     return 0
 
 
@@ -148,6 +169,11 @@ def build_parser():
     sp.add_argument("--password", help="avoid the prompt (it lands in your "
                                        "shell history; prefer the prompt)")
 
+    spr = sub.add_parser("protect",
+                         help="ask for the password on Settings even when "
+                              "trusted")
+    spr.add_argument("state", choices=("on", "off"))
+
     sub.add_parser("open", help="no password from anywhere")
     sub.add_parser("password", help="require a password everywhere")
 
@@ -185,6 +211,8 @@ def main(argv=None):
     if args.cmd == "trusted":
         args.mode = "trusted"
         return cmd_mode(cfg, s, args)
+    if args.cmd == "protect":
+        return cmd_protect(cfg, s, args)
     if args.cmd == "reset":
         return cmd_reset(cfg, s, args)
     if args.cmd == "reset-login":

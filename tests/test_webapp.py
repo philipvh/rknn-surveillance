@@ -1325,6 +1325,103 @@ class TestDataSaverSwitch(Base):
         self.assertIn(b"Data saver: aiming frames/second", body)
 
 
+class TestSettingsCanBeHeldBack(Base):
+    """Trusted to watch, credentials to change.
+
+    The wall tablet hangs in a room anyone at the club can walk into, and the
+    settings pages can publish a device, open the panel to everybody, or set a
+    new password. This lets the two be separated.
+    """
+
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}      # the wall tablet, trusted
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+
+    def auth_as(self, user, pw):
+        tok = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        return {"Authorization": "Basic " + tok}
+
+    def _trusted_mode(self):
+        st = self.store
+        st.set_web_credentials("keeper", "s3cret-long")
+        st.set_auth_mode("trusted", ["192.168.92.0/24"])
+        return st
+
+    def test_off_by_default_the_wall_panel_reaches_settings(self):
+        self._trusted_mode()
+        r = self.c.get("/settings", environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 200)
+
+    def test_on_the_wall_panel_is_asked_for_the_password(self):
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        r = self.c.get("/settings", environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 401,
+                         "a trusted client walked into the settings anyway")
+
+    def test_every_settings_page_is_covered_not_just_the_first(self):
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        for path in ("/settings", "/settings/credentials", "/settings/system",
+                     "/settings/wifi", "/settings/forwarding"):
+            r = self.c.get(path, environ_base=self.LOCAL)
+            self.assertEqual(r.status_code, 401, path)
+
+    def test_the_posts_are_covered_too(self):
+        """A GET that prompts and a POST that does not would be theatre."""
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        for path in ("/settings/access", "/settings/credentials/reset",
+                     "/settings/reset", "/settings/restart"):
+            r = self.c.post(path, data={}, environ_base=self.LOCAL)
+            self.assertEqual(r.status_code, 401, path)
+
+    def test_watching_is_untouched(self):
+        """The whole point: the panel itself must not start prompting."""
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        r = self.c.get("/", environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 200,
+                         "protecting the settings broke the wall display")
+
+    def test_the_password_still_gets_you_in(self):
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        r = self.c.get("/settings", environ_base=self.LOCAL,
+                       headers=self.auth_as("keeper", "s3cret-long"))
+        self.assertEqual(r.status_code, 200)
+
+    def test_it_cannot_be_switched_on_with_no_password_to_give(self):
+        """The trap it would otherwise be: the screen it locks is the screen
+        where you would set the password."""
+        st = self.store
+        with self.assertRaises(ValueError):
+            st.set_protect_settings(True, have_password=False)
+        self.assertFalse(st.protect_settings())
+
+    def test_forgetting_the_access_settings_unlocks_them(self):
+        """settings_cli.py reset-access is the documented way back in."""
+        st = self._trusted_mode()
+        st.set_protect_settings(True)
+        st.clear_access()
+        self.assertFalse(st.protect_settings())
+        # clear_access forgets the mode as well, so trust has to be restated
+        # before the wall panel is free again -- the point here is only that
+        # the flag no longer survives the documented escape.
+        st.set_auth_mode("trusted", ["192.168.92.0/24"])
+        r = self.c.get("/settings", environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 200)
+
+
 class TestMeteredLink(Base):
     """A viewer over the 4G tunnel costs money; one on the board's own wiring
     does not. The streams are the only thing here big enough to matter."""

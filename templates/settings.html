@@ -646,6 +646,23 @@ still needs one.</div>
     <b style="color:#e0a64a">not</b> if this board is ever port-forwarded or
     put on wifi a guest can join.</span></label>
 
+  <label class="mode" style="display:block; margin-top:14px">
+    <input type="checkbox" name="protect_settings" value="1"
+           {% if protect_settings %}checked{% endif %}>
+    <b>Always ask for the password on these Settings pages</b><br>
+    <span style="color:#6d8378; font-size:13px">
+      Even from the networks above. Watching the cameras stays free; changing
+      how the system is set up does not. The wall tablet hangs where anyone can
+      reach it, and from here you can publish a device, open the panel to
+      everybody, or set a new password.
+      {% if not have_password %}
+      <br><b style="color:#e2a06a">Set a panel login below first</b> &mdash;
+      switching this on with no password would lock these pages with nothing
+      able to answer the prompt.
+      {% endif %}
+    </span>
+  </label>
+
   <div id="actions"><button type="submit">Save access</button></div>
 </form>
 
