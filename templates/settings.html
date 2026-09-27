@@ -663,6 +663,18 @@ still needs one.</div>
     </span>
   </label>
 
+  <label class="mode" style="display:block; margin-top:10px">
+    <input type="checkbox" name="protect_manual" value="1"
+           {% if protect_manual %}checked{% endif %}>
+    <b>Always ask for the password for manual control</b><br>
+    <span style="color:#6d8378; font-size:13px">
+      The Manual tab: moving the camera, and setting where the sweep stops.
+      Someone who wanders up to the wall tablet can still watch, but cannot
+      re-aim the camera or redefine the sweep. The tab is hidden rather than
+      left there doing nothing.
+    </span>
+  </label>
+
   <div id="actions"><button type="submit">Save access</button></div>
 </form>
 

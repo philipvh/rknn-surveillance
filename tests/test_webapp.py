@@ -1422,6 +1422,92 @@ class TestSettingsCanBeHeldBack(Base):
         self.assertEqual(r.status_code, 200)
 
 
+class TestManualControlCanBeHeldBack(Base):
+    """Watching is free; re-aiming the camera is not.
+
+    The wall tablet is in a room anyone at the club can walk into, and the
+    Manual tab can swing the camera and redefine where the sweep stops.
+    """
+
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}
+
+    MANUAL = ("/api/ptz/move", "/api/ptz/zoom", "/api/ptz/stop",
+              "/api/ptz/preset", "/api/ptz/sweep", "/api/ptz/sweep/set",
+              "/api/ptz/sweep/once", "/api/ptz/home/set")
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+        self.store.set_web_credentials("keeper", "s3cret-long")
+        self.store.set_auth_mode("trusted", ["192.168.92.0/24"])
+
+    def auth_as(self, user, pw):
+        tok = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        return {"Authorization": "Basic " + tok}
+
+    def test_off_by_default_the_wall_panel_can_aim(self):
+        r = self.c.post("/api/ptz/move", data={"dir": "left"},
+                        environ_base=self.LOCAL)
+        self.assertNotEqual(r.status_code, 401)
+
+    def test_on_every_manual_endpoint_refuses(self):
+        self.store.set_protect_manual(True)
+        for path in self.MANUAL:
+            r = self.c.post(path, data={}, environ_base=self.LOCAL)
+            self.assertEqual(r.status_code, 401, path)
+
+    def test_watching_is_untouched(self):
+        self.store.set_protect_manual(True)
+        self.assertEqual(
+            self.c.get("/", environ_base=self.LOCAL).status_code, 200)
+
+    def test_the_tab_is_hidden_rather_than_left_doing_nothing(self):
+        self.store.set_protect_manual(True)
+        body = self.c.get("/", environ_base=self.LOCAL).data
+        self.assertNotIn(b'data-tab="manual"', body)
+        self.assertIn(b"Manual control needs the panel password", body)
+
+    def test_the_tab_is_there_once_signed_in(self):
+        self.store.set_protect_manual(True)
+        body = self.c.get("/", environ_base=self.LOCAL,
+                          headers=self.auth_as("keeper", "s3cret-long")).data
+        self.assertIn(b'data-tab="manual"', body)
+
+    def test_the_password_still_works_on_the_endpoints(self):
+        self.store.set_protect_manual(True)
+        r = self.c.post("/api/ptz/stop", data={}, environ_base=self.LOCAL,
+                        headers=self.auth_as("keeper", "s3cret-long"))
+        self.assertNotEqual(r.status_code, 401)
+
+    def test_it_is_independent_of_the_settings_lock(self):
+        """A club may want someone able to aim but not to publish devices."""
+        self.store.set_protect_settings(True)
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", data={},
+                        environ_base=self.LOCAL).status_code != 401, True)
+        self.store.set_protect_settings(False)
+        self.store.set_protect_manual(True)
+        self.assertEqual(
+            self.c.get("/settings", environ_base=self.LOCAL).status_code, 200)
+
+    def test_it_cannot_be_switched_on_with_no_password_to_give(self):
+        self.store.clear_web_credentials()
+        with self.assertRaises(ValueError):
+            self.store.set_protect_manual(True, have_password=False)
+
+    def test_forgetting_the_access_settings_unlocks_it(self):
+        self.store.set_protect_manual(True)
+        self.store.clear_access()
+        self.assertFalse(self.store.protect_manual())
+
+
 class TestMeteredLink(Base):
     """A viewer over the 4G tunnel costs money; one on the board's own wiring
     does not. The streams are the only thing here big enough to matter."""

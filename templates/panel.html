@@ -182,7 +182,9 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
     <div id="pad">
       <div id="tabs">
         <button class="tab on" data-tab="view">View</button>
+        {% if not manual_locked %}
         <button class="tab" data-tab="manual">Manual</button>
+        {% endif %}
       </div>
 
       <div class="pane on" id="pane-view">
@@ -200,6 +202,11 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       </div>
 
       <div class="pane" id="pane-manual">
+      {% if manual_locked %}
+        <p class="sub">Manual control needs the panel password. Open
+          <a href="/settings">Settings</a> and sign in, or use a device that
+          is signed in.</p>
+      {% endif %}
       {% if has_ptz %}
         <div class="dpad">
           <div class="row">

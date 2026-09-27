@@ -68,9 +68,11 @@ def cmd_show(cfg, s, args):
         d = "a password is required" if cfg.web_auth_required else "no password"
         print(f"access         from config.yaml: {d}")
 
-    if s.protect_settings():
-        print("settings       password required even from a trusted network"
-              "   ['protect off' undoes this]")
+    for flag, label, verb in ((s.protect_settings(), "settings", "off settings"),
+                              (s.protect_manual(), "manual  ", "off manual")):
+        if flag:
+            print(f"{label}       password required even from a trusted "
+                  f"network   ['protect {verb}' undoes this]")
 
     if s.has_credentials():
         print(f"login          {s.web_user!r}   [set from the panel, PBKDF2]")
@@ -108,19 +110,27 @@ def cmd_passwd(cfg, s, args):
 
 
 def cmd_protect(cfg, s, args):
-    """The way back in when the settings pages have locked themselves."""
+    """The way back in when the panel has locked itself."""
     on = args.state == "on"
+    what = getattr(args, "what", "settings") or "settings"
     have = bool(s.has_credentials()) or bool(cfg.web_password)
     try:
-        s.set_protect_settings(on, have_password=have)
+        if what in ("settings", "both"):
+            s.set_protect_settings(on, have_password=have)
+        if what in ("manual", "both"):
+            s.set_protect_manual(on, have_password=have)
     except ValueError as e:
         print(f"{e}; nothing changed.", file=sys.stderr)
         return 1
+    # Phrased to avoid agreeing with a subject that is sometimes plural
+    # ("the settings pages") and sometimes not ("manual control").
+    names = {"settings": "the settings pages", "manual": "manual control",
+             "both": "the settings pages and manual control"}[what]
     if on:
-        print("The settings pages now ask for the password even from a "
-              "trusted network. Watching is unchanged.")
+        print(f"A password is now required for {names}, even from a trusted "
+              f"network. Watching is unchanged.")
     else:
-        print("The settings pages follow the access mode again.")
+        print(f"Access to {names} follows the access mode again.")
     return 0
 
 
@@ -173,6 +183,9 @@ def build_parser():
                          help="ask for the password on Settings even when "
                               "trusted")
     spr.add_argument("state", choices=("on", "off"))
+    spr.add_argument("what", nargs="?", default="settings",
+                     choices=("settings", "manual", "both"),
+                     help="what to protect (default: settings)")
 
     sub.add_parser("open", help="no password from anywhere")
     sub.add_parser("password", help="require a password everywhere")

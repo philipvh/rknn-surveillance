@@ -151,8 +151,10 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         # The settings pages can be held back even where watching is free: the
         # wall tablet is in a room anyone can walk into, and from here you can
         # add a forward, open the panel to everybody, or set a new password.
-        strict = (area == "settings" and settings is not None
-                  and settings.protect_settings() and _have_password())
+        strict = False
+        if settings is not None and _have_password():
+            strict = ((area == "settings" and settings.protect_settings())
+                      or (area == "manual" and settings.protect_manual()))
         if mode == "open" and not strict:
             return True
         if mode == "trusted" and not strict and settings is not None:
@@ -185,6 +187,21 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         @functools.wraps(fn)
         def wrapper(*a, **kw):
             if not check_auth():
+                return _unauthorised(cfg.site_name)
+            return fn(*a, **kw)
+        return wrapper
+
+    def protected_manual(fn):
+        """The controls that move the camera and set the sweep.
+
+        Watching stays free; a visitor who wanders up to the wall tablet
+        should not be able to re-aim the camera or redefine where the sweep
+        stops. Same fallback as protected_settings: with no password set this
+        is just `protected`, because a lock nobody can open is a fault.
+        """
+        @functools.wraps(fn)
+        def wrapper(*a, **kw):
+            if not check_auth(area="manual"):
                 return _unauthorised(cfg.site_name)
             return fn(*a, **kw)
         return wrapper
@@ -296,7 +313,13 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             presets=(cfg._get("ptz", "scan_presets", default=[]) or []),
             home=cfg._get("ptz", "home_preset", default="Home"),
             keepalive_ms=int(web.get("keepalive_ms", 250)),
-            has_ptz=ptz is not None and getattr(ptz, "enabled", True),
+            # A locked Manual tab is not hidden to keep a secret -- the
+            # endpoints refuse regardless. It is hidden so nobody presses a
+            # row of buttons that silently do nothing.
+            has_ptz=(ptz is not None and getattr(ptz, "enabled", True)
+                     and check_auth(area="manual")),
+            manual_locked=(ptz is not None and getattr(ptz, "enabled", True)
+                           and not check_auth(area="manual")),
             has_speaker=announcer is not None and announcer.enabled,
             has_detector=live is not None,
             has_media=True,
@@ -534,6 +557,8 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             mode=_auth_mode(),
             protect_settings=(settings is not None
                               and settings.protect_settings()),
+            protect_manual=(settings is not None
+                            and settings.protect_manual()),
             have_password=_have_password(),
             mode_from_panel=(settings is not None and bool(settings.auth_mode)),
             networks=", ".join(str(n) for n in settings.trusted_networks)
@@ -968,10 +993,13 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         mode = (request.form.get("mode") or "").strip()
         nets = request.form.get("networks") or ""
         want_strict = request.form.get("protect_settings") == "1"
+        want_manual = request.form.get("protect_manual") == "1"
         try:
             settings.set_auth_mode(mode, nets)
             settings.set_protect_settings(want_strict,
                                           have_password=_have_password())
+            settings.set_protect_manual(want_manual,
+                                        have_password=_have_password())
         except ValueError as e:
             return _settings_page("credentials",
                                   acc_err=str(e)[0].upper() + str(e)[1:] + ".")
@@ -1332,7 +1360,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(out)
 
     @app.route("/api/ptz/move", methods=["POST"])
-    @protected
+    @protected_manual
     def api_move():
         need_ptz()
         direction = (request.form.get("dir") or "").lower()
@@ -1344,7 +1372,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True)
 
     @app.route("/api/ptz/zoom", methods=["POST"])
-    @protected
+    @protected_manual
     def api_zoom():
         need_ptz()
         _take_manual()
@@ -1355,7 +1383,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True)
 
     @app.route("/api/ptz/stop", methods=["POST", "GET"])
-    @protected
+    @protected_manual
     def api_stop():
         """Also accepts GET so a dying page can fire it via an <img> src.
 
@@ -1370,7 +1398,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True)
 
     @app.route("/api/ptz/preset", methods=["POST"])
-    @protected
+    @protected_manual
     def api_preset():
         need_ptz()
         name = request.form.get("name") or ""
@@ -1382,7 +1410,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True)
 
     @app.route("/api/ptz/sweep/set", methods=["POST"])
-    @protected
+    @protected_manual
     def api_sweep_set():
         """Save the current view as one end of the trigger-sweep.
 
@@ -1406,7 +1434,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True, side=side, ready=settings.sweep_ready)
 
     @app.route("/api/ptz/sweep", methods=["POST"])
-    @protected
+    @protected_manual
     def api_sweep_toggle():
         """Turn the trigger-sweep on or off from the panel."""
         if settings is None:
@@ -1417,7 +1445,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                        ready=settings.sweep_ready)
 
     @app.route("/api/ptz/home/set", methods=["POST"])
-    @protected
+    @protected_manual
     def api_home_set():
         """Save the current view as the home / rest position.
 
@@ -1436,7 +1464,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return jsonify(ok=True, name=home)
 
     @app.route("/api/ptz/sweep/once", methods=["POST"])
-    @protected
+    @protected_manual
     def api_sweep_once():
         """Run one sweep cycle now, to check the aim.
 

@@ -415,6 +415,18 @@ class Settings:
     def protect_settings(self):
         return bool(self.get("protect_settings", False))
 
+    def protect_manual(self):
+        """Aiming the camera is changing something too.
+
+        Separate from protect_settings on purpose: a club might well want a
+        committee member able to swing the camera without also handing them
+        the page that publishes devices and sets passwords.
+        """
+        return bool(self.get("protect_manual", False))
+
+    def set_protect_manual(self, on, have_password=True):
+        return self._set_protect("protect_manual", on, have_password)
+
     def set_protect_settings(self, on, have_password=True):
         """Turn it on or off.
 
@@ -423,16 +435,19 @@ class Settings:
         where you would set the password. settings_cli.py is the way back
         either way, and it says so.
         """
+        return self._set_protect("protect_settings", on, have_password)
+
+    def _set_protect(self, key, on, have_password):
         on = bool(on)
         if on and not have_password:
             raise ValueError(
-                "set a panel password first, or this would lock the settings "
+                "set a panel password first, or this would lock the panel "
                 "with no way to answer the prompt")
         with self._lock:
             if on:
-                self._data["protect_settings"] = True
+                self._data[key] = True
             else:
-                self._data.pop("protect_settings", None)
+                self._data.pop(key, None)
             self._save()
         return on
 
@@ -583,7 +598,9 @@ class Settings:
         with self._lock:
             # Whatever else "forget the access settings" means, it has to mean
             # you can reach the settings again.
-            changed = self._data.pop("protect_settings", None) is not None
+            changed = False
+            for k in ("protect_settings", "protect_manual"):
+                changed = self._data.pop(k, None) is not None or changed
             for k in ("web_auth_mode", "web_trusted_networks"):
                 if k in self._data:
                     del self._data[k]
