@@ -1,6 +1,6 @@
 # Copyright 2026 Philip van Houtte, magicview.tv, the Netherlands
 # SPDX-License-Identifier: Apache-2.0
-"""The router UI proxy.
+"""The proxy half of the forwarder.
 
 An iptables DNAT cannot publish the Huawei's web UI: it rewrites the IP header
 and leaves the HTTP payload alone, so the Host the browser wrote survives, and
@@ -23,7 +23,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import router_ui  # noqa: E402
+import forwarder as router_ui  # noqa: E402
 
 SEEN = []
 
@@ -156,10 +156,8 @@ class TestHopByHop(Base):
         self.assertEqual(len(SEEN), 1)
 
 
-class TestDiscovery(unittest.TestCase):
-    def test_a_bad_upstream_is_refused_rather_than_bound(self):
-        self.assertEqual(router_ui.main(["--upstream", "not-an-address"]), 2)
-
-    def test_it_refuses_to_start_without_a_tunnel(self):
-        rc = router_ui.main(["--upstream", "127.0.0.1", "--tun", "nosuchtun0"])
-        self.assertEqual(rc, 1, "it bound somewhere it should not have")
+# What used to be TestDiscovery lived on router_ui.main()'s --upstream/--tun
+# flags. The forwarder takes its targets from the panel instead, so those
+# behaviours moved: a target off every attached network is refused in
+# test_forwarding.TestTheFence, and a tunnel forward with no tunnel address
+# waits rather than binding elsewhere in TestForwarder.

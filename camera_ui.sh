@@ -13,6 +13,18 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 #
+# SUPERSEDED by the forwarder. Kept for --remove, to take the old DNAT rules
+# out; publishing the camera is now Settings -> Forwarding in the panel.
+#
+# Why it was replaced: a DNAT rewrites the IP header and leaves the HTTP
+# payload alone, so the Host the browser wrote arrives intact. That works
+# here only because the Foscam ignores Host. The 4G router validates it and
+# redirects anything else to its own address, which the client cannot reach.
+# A proxy rewrites the request, covers both, and needs no root -- so it is
+# the general mechanism and this was the lucky special case.
+#
+#   sudo bash camera_ui.sh --remove     # then add it in the panel instead
+#
 # Publish the camera's own web UI on a board port, so it can be reached over
 # the VPN tunnel (and the club LAN) without a route into the camera segment.
 #

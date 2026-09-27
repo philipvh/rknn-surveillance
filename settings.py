@@ -406,6 +406,105 @@ class Settings:
                     (" for " + ", ".join(str(n) for n in nets)) if nets else "")
         return nets
 
+    # ------------------------------------------------------------- forwards
+    # A device's own web UI, published on a board port. The obvious way is an
+    # iptables DNAT, and camera_ui.sh does exactly that -- but it only works by
+    # luck. A DNAT rewrites the IP header and leaves the HTTP payload alone, so
+    # the Host the browser wrote arrives intact. The Foscam ignores Host; the
+    # 4G router validates it and redirects anything else to its own address,
+    # which the client cannot route to. A proxy rewrites the request, works for
+    # both, and needs no root.
+    #
+    # It is also a hole if it is not fenced. Anything that forwards a host the
+    # operator names is one careless entry away from being a way to reach
+    # something it should not, so the target is checked here -- once, where
+    # both the panel and the CLI go through it.
+    FORWARD_PORTS = range(8080, 8100)
+    NAME_MAX = 40
+
+    @staticmethod
+    def parse_forwards(values, attached=None, reserved_ports=()):
+        """Validate a list of forward definitions. Raises ValueError.
+
+        `attached` is the list of directly-attached networks; a target outside
+        them is refused. That is the fence: the board may publish a device it
+        is physically next to, and nothing else -- not the internet, not the
+        far side of the tunnel.
+        """
+        if attached is None:
+            from netinfo import attached_networks
+            attached = attached_networks()
+        reserved = {int(p) for p in reserved_ports}
+        out, seen = [], set()
+        for raw in values or []:
+            if not isinstance(raw, dict):
+                raise ValueError("a forward must be a set of fields")
+            name = str(raw.get("name", "")).strip()
+            if not name:
+                raise ValueError("every forward needs a name")
+            if len(name) > Settings.NAME_MAX:
+                raise ValueError("%r is too long a name" % name)
+
+            try:
+                port = int(raw.get("port"))
+                target_port = int(raw.get("target_port", 80))
+            except (TypeError, ValueError):
+                raise ValueError("%s: the ports must be numbers" % name)
+            if port not in Settings.FORWARD_PORTS:
+                raise ValueError("%s: port %d is outside %d-%d"
+                                 % (name, port, Settings.FORWARD_PORTS[0],
+                                    Settings.FORWARD_PORTS[-1]))
+            if port in reserved:
+                raise ValueError("%s: port %d is already the panel's" % (name, port))
+            if port in seen:
+                raise ValueError("two forwards both want port %d" % port)
+            if not 1 <= target_port <= 65535:
+                raise ValueError("%s: %d is not a port" % (name, target_port))
+
+            host = str(raw.get("host", "")).strip()
+            try:
+                ip = ipaddress.ip_address(host)
+            except ValueError:
+                raise ValueError("%s: %r is not an address" % (name, host))
+            if ip.is_loopback:
+                # Otherwise a forward is a way to reach the panel from the
+                # board's own address, and the trusted-network check is only
+                # ever as good as the address it is shown.
+                raise ValueError("%s: the board itself is not a target" % name)
+            if not any(ip in n for n in attached):
+                raise ValueError(
+                    "%s: %s is not on a network this board is attached to; "
+                    "only a device on the same wire can be published"
+                    % (name, host))
+
+            expose = str(raw.get("expose", "tunnel")).strip().lower()
+            if expose not in ("tunnel", "local"):
+                raise ValueError("%s: expose must be 'tunnel' or 'local'" % name)
+
+            seen.add(port)
+            out.append({"name": name, "port": port, "host": str(ip),
+                        "target_port": target_port, "expose": expose,
+                        "enabled": bool(raw.get("enabled", True))})
+        return out
+
+    @property
+    def forwards(self):
+        raw = self.get("web_forwards") or []
+        try:
+            return self.parse_forwards(raw)
+        except ValueError as e:
+            # Stored badly, or the site was rewired out from under it. Publish
+            # nothing rather than something unintended.
+            log.warning("stored forwards are unusable (%s); publishing none", e)
+            return []
+
+    def set_forwards(self, values, attached=None, reserved_ports=()):
+        checked = self.parse_forwards(values, attached, reserved_ports)
+        with self._lock:
+            self._data["web_forwards"] = checked
+            self._save()
+        return checked
+
     @staticmethod
     def parse_networks(values):
         """Turn text into networks, rejecting anything that will not match.

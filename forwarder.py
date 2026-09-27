@@ -12,13 +12,14 @@
 # accepted for any failure to detect, record, retain or report an event.
 # See the NOTICE file for the full disclaimer.
 
-"""Reach the 4G router's web UI from the tunnel.
+"""Publish devices the board is next to, on board ports.
 
-An iptables DNAT is the obvious way to publish something that sits on a
-segment the client cannot route to, and it is what camera_ui.sh does for the
-camera. It does not work here. The Huawei checks the Host header -- ordinary
-DNS-rebinding protection -- and answers anything else with a redirect to its
-own absolute address:
+An iptables DNAT is the obvious way to publish something on a segment the
+client cannot route to, and camera_ui.sh does exactly that for the camera. It
+works there by luck. A DNAT rewrites the IP header and leaves the HTTP payload
+alone, so the Host the browser wrote arrives intact -- and while the Foscam
+ignores Host entirely, the 4G router validates it (ordinary DNS-rebinding
+protection) and answers anything else with a redirect to its own address:
 
     Host: 192.168.8.1     -> 200, the real UI
     Host: 10.8.2.6:8082   -> 307 http://192.168.8.1/html/index.html?origin=xxx
@@ -32,10 +33,16 @@ So this is a small reverse proxy: it rewrites Host on the way in and rewrites
 absolute Location headers back on the way out, so the browser stays on the
 proxy instead of being sent to an address only the board can reach.
 
-It binds to the tunnel address by default. That is the access control: nothing
-outside the VPN can open a socket to it at all, which matters because the
-router UI is a bigger prize than the camera -- it holds the SIM, the wifi
-password and the firewall.
+Which devices are published is configured in the panel, not here, and every
+entry is checked against the networks the board is actually attached to before
+it is stored -- see Settings.parse_forwards. A forward exposed as "tunnel"
+binds to the tunnel address, so nothing outside the VPN can open a socket to
+it; that is the right default for the router UI, which holds the SIM, the wifi
+password and the firewall, and a weaker need for the camera.
+
+One process serves them all and reconciles itself when the settings file
+changes, so adding a forward does not need a restart, a root password, or an
+iptables rule that outlives the device it pointed at.
 """
 
 import argparse
@@ -46,9 +53,11 @@ import re
 import socket
 import subprocess
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-log = logging.getLogger("routerui")
+log = logging.getLogger("forwarder")
 
 # Set per RFC 7230; a proxy must not pass these along.
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate",
@@ -189,6 +198,11 @@ class ProxyServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
 
+class ProxyServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def build(bind, port, upstream, upstream_port, public_host=None):
     srv = ProxyServer((bind, port), Proxy)
     srv.upstream_host = upstream
@@ -197,47 +211,133 @@ def build(bind, port, upstream, upstream_port, public_host=None):
     return srv
 
 
+def tunnel_address(iface="tun0"):
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr", "show", iface],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", out)
+    return m.group(1) if m else None
+
+
+def _key(fwd, bind):
+    """What makes a running listener the same as a wanted one."""
+    return (bind, fwd["port"], fwd["host"], fwd["target_port"])
+
+
+class Forwarder:
+    """Owns one listener per enabled forward, and keeps them matching.
+
+    Reconciled rather than restarted: a forward the operator did not touch
+    keeps its socket, so adding the router does not interrupt somebody looking
+    at the camera.
+    """
+
+    def __init__(self, settings, tun="tun0", poll_s=5.0):
+        self.settings = settings
+        self.tun = tun
+        self.poll_s = float(poll_s)
+        self._running = {}          # key -> (server, thread, name)
+        self._stop = threading.Event()
+        self._last_warn = None
+
+    def bind_for(self, fwd):
+        if fwd["expose"] == "local":
+            return "0.0.0.0"
+        return tunnel_address(self.tun)
+
+    def desired(self):
+        out = {}
+        for fwd in self.settings.forwards:
+            if not fwd.get("enabled", True):
+                continue
+            bind = self.bind_for(fwd)
+            if not bind:
+                self._warn("%s wants the tunnel, which has no address yet"
+                           % fwd["name"])
+                continue
+            out[_key(fwd, bind)] = fwd
+        return out
+
+    def _warn(self, msg):
+        # The tunnel flaps; saying so once per state change is enough.
+        if self._last_warn != msg:
+            self._last_warn = msg
+            log.warning("%s", msg)
+
+    def reconcile(self):
+        want = self.desired()
+        for key in list(self._running):
+            if key not in want:
+                srv, thread, name = self._running.pop(key)
+                log.info("stopping %s on :%d", name, key[1])
+                srv.shutdown()
+                srv.server_close()
+        for key, fwd in want.items():
+            if key in self._running:
+                continue
+            bind, port, host, target_port = key
+            try:
+                srv = build(bind, port, host, target_port)
+            except OSError as e:
+                self._warn("%s: cannot listen on %s:%d (%s)"
+                           % (fwd["name"], bind, port, e))
+                continue
+            t = threading.Thread(target=srv.serve_forever, daemon=True,
+                                 name="fwd-%d" % port)
+            t.start()
+            self._running[key] = (srv, t, fwd["name"])
+            log.info("%s: http://%s:%d/  ->  %s:%d (Host rewritten)",
+                     fwd["name"], bind, port, host, target_port)
+
+    def run(self):
+        while not self._stop.is_set():
+            try:
+                self.reconcile()
+            except Exception:
+                log.exception("could not reconcile the forwards")
+            self._stop.wait(self.poll_s)
+        self.stop()
+
+    def stop(self):
+        self._stop.set()
+        for key, (srv, _t, name) in list(self._running.items()):
+            log.info("stopping %s", name)
+            srv.shutdown()
+            srv.server_close()
+            self._running.pop(key, None)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
-    ap.add_argument("--bind", default=None,
-                    help="default: the tunnel address, so only the VPN can "
-                         "open a socket to this at all")
-    ap.add_argument("--upstream", default=None,
-                    help="default: the current default gateway")
-    ap.add_argument("--upstream-port", type=int, default=80)
     ap.add_argument("--tun", default="tun0")
+    ap.add_argument("--poll", type=float, default=5.0)
+    ap.add_argument("--config", default=None, help="config.yaml to read")
     args = ap.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)-7s %(name)-10s %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S")
 
-    upstream = args.upstream or default_gateway()
-    if not upstream:
-        log.error("no default gateway to proxy to; pass --upstream")
-        return 2
+    import config as config_mod
+    from settings import Settings
     try:
-        ipaddress.ip_address(upstream)
-    except ValueError:
-        log.error("upstream %r is not an address", upstream)
+        cfg = config_mod.load(args.config, require_password=False)
+    except Exception as e:
+        log.error("could not read the config: %s", e)
         return 2
+    # The same file the panel writes, so a forward added there is live within
+    # a poll -- no restart, no root, no iptables rule to remember.
+    path = cfg.events_root.parent / "settings.json"
+    settings = Settings(path)
 
-    bind = args.bind or tunnel_address(args.tun)
-    if not bind:
-        log.error("%s has no address yet; is the tunnel up? "
-                  "(or pass --bind)", args.tun)
-        return 1
-
-    srv = build(bind, args.port, upstream, args.upstream_port)
-    log.info("router UI at http://%s:%d/  ->  %s:%d (Host rewritten)",
-             bind, args.port, upstream, args.upstream_port)
+    fw = Forwarder(settings, tun=args.tun, poll_s=args.poll)
+    log.info("watching %s for forwards", path)
     try:
-        srv.serve_forever()
+        fw.run()
     except KeyboardInterrupt:
-        pass
-    finally:
-        srv.server_close()
+        fw.stop()
     return 0
 
 

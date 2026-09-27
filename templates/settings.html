@@ -104,6 +104,8 @@ textarea { width:100%; max-width:52em; font-family:monospace; font-size:14px;
      class="{% if tab == 'system' %}on{% endif %}">System</a>
   <a href="{{ url_for('settings_wifi') }}"
      class="{% if tab == 'wifi' %}on{% endif %}">Wi-Fi</a>
+  <a href="{{ url_for('settings_forwarding') }}"
+     class="{% if tab == 'forwarding' %}on{% endif %}">Forwarding</a>
 </div>
 
 {% if tab == 'wifi' %}
@@ -362,6 +364,76 @@ want before the board leaves. It also starts immediately.</p>
   <span class="sub">&nbsp;one TCP connect and one DNS lookup, only when you
   press this &mdash; the board does not phone out on its own.</span>
 </form>
+{% endif %}
+
+{% elif tab == 'forwarding' %}
+
+<h3>Device pages published on this board</h3>
+<p class="sub">A camera or router on a segment you cannot route to, reachable
+through the board instead. This is a proxy, not a port forward: it rewrites the
+Host header, which is what a plain iptables forward cannot do &mdash; the camera
+ignores Host, but the 4G router refuses anything but its own address.</p>
+
+{% if fwd_err %}<p id="hint" style="color:#e2a06a">{{ fwd_err }}</p>{% endif %}
+{% if fwd_msg %}<p id="hint" style="color:#62bb99">{{ fwd_msg }}</p>{% endif %}
+
+{% if not editable %}
+<p id="hint">This panel cannot save settings.</p>
+{% else %}
+<form method="post" action="{{ url_for('settings_forwarding') }}">
+  <table style="width:100%; border-collapse:collapse; font-size:14px">
+    <tr style="text-align:left; color:#6d8378">
+      <th>On</th><th>Name</th><th>Board port</th><th>Device</th>
+      <th>Its port</th><th>Reachable from</th>
+    </tr>
+    {% for f in forwards + [none] %}
+    {% set i = loop.index0 %}
+    <tr style="border-top:1px solid #2f3f38">
+      <td><input type="checkbox" name="on_{{ i }}" value="1"
+                 {% if f and f.enabled %}checked{% endif %}></td>
+      <td><input type="text" name="name_{{ i }}" style="width:96%"
+                 value="{{ f.name if f else '' }}"
+                 placeholder="{{ 'Camera' if not f else '' }}"></td>
+      <td><input type="text" name="port_{{ i }}" style="width:70px"
+                 value="{{ f.port if f else '' }}"></td>
+      <td><input type="text" name="host_{{ i }}" style="width:96%"
+                 value="{{ f.host if f else '' }}"></td>
+      <td><input type="text" name="tport_{{ i }}" style="width:70px"
+                 value="{{ f.target_port if f else 80 }}"></td>
+      <td>
+        <select name="expose_{{ i }}">
+          <option value="tunnel" {% if not f or f.expose == 'tunnel' %}selected{% endif %}>the tunnel only</option>
+          <option value="local" {% if f and f.expose == 'local' %}selected{% endif %}>anywhere it is reachable</option>
+        </select>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <div id="actions"><button type="submit">Save forwards</button></div>
+</form>
+
+<div class="note">
+  Board ports must be in {{ fwd_ports }}. A device has to be on a network this
+  board is directly attached to &mdash; {{ attached|join(', ') }} &mdash; so a
+  forward cannot be pointed at the internet or at the far side of the tunnel,
+  and never at the board itself. <b>The tunnel only</b> is the right choice for
+  a router's own page: it holds the SIM, the wifi password and the firewall,
+  and does not belong on the club network.
+</div>
+
+{% if neighbours %}
+<h3>Seen on the wire</h3>
+<p id="hint">Devices this board has spoken to recently. Copy an address into
+the table above; nothing here is published until you do.</p>
+<table style="width:100%; border-collapse:collapse; font-size:13px">
+  {% for n in neighbours %}
+  <tr style="border-top:1px solid #2f3f38">
+    <td style="padding:6px 0">{{ n.ip }}</td>
+    <td style="color:#6d8378">{{ n.mac }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endif %}
 {% endif %}
 
 {% elif tab == 'system' %}

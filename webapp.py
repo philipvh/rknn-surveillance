@@ -32,6 +32,7 @@ import hmac
 import ipaddress
 
 from netinfo import AttachedNetworks
+from settings import Settings as _SettingsCls
 import json
 import logging
 import os
@@ -510,6 +511,12 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             networks=", ".join(str(n) for n in settings.trusted_networks)
                      if settings is not None else "",
             client_ip=request.remote_addr or "",
+            forwards=(settings.forwards if settings is not None else []),
+            fwd_err="", fwd_msg="",
+            fwd_ports="%d-%d" % (_SettingsCls.FORWARD_PORTS[0],
+                                 _SettingsCls.FORWARD_PORTS[-1]),
+            neighbours=_neighbours(),
+            attached=[str(n) for n in _attached.get()],
             sys_err="", sys_msg="",
             fields=_system_fields(),
             raw_yaml=_overrides_yaml(),
@@ -717,6 +724,68 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                                    require_password=False), ""
         except Exception as e:
             return None, str(e)
+
+    def _neighbours():
+        """Devices the board has actually spoken to, to fill the form in.
+
+        This is how the camera and the router were found in the first place:
+        the kernel remembers the layer-2 address of everything on the wire.
+        Suggestions only -- every one still goes through parse_forwards.
+        """
+        out = []
+        try:
+            raw = subprocess.run(["ip", "neigh", "show"], capture_output=True,
+                                 text=True, timeout=5).stdout
+        except (OSError, subprocess.SubprocessError):
+            return out
+        nets = _attached.get()
+        for line in raw.splitlines():
+            parts = line.split()
+            if len(parts) < 2 or "lladdr" not in parts:
+                continue
+            addr = parts[0]
+            try:
+                ip = ipaddress.ip_address(addr)
+            except ValueError:
+                continue
+            if ip.version != 4 or not any(ip in n for n in nets):
+                continue
+            mac = parts[parts.index("lladdr") + 1]
+            out.append({"ip": str(ip), "mac": mac})
+        return sorted(out, key=lambda d: tuple(int(x) for x in d["ip"].split(".")))
+
+    @app.route("/settings/forwarding", methods=["GET", "POST"])
+    @protected
+    def settings_forwarding():
+        err = msg = ""
+        if request.method == "POST":
+            if settings is None:
+                abort(503)
+            rows, i = [], 0
+            while True:
+                name = request.form.get("name_%d" % i)
+                if name is None:
+                    break
+                if name.strip():
+                    rows.append({
+                        "name": name,
+                        "port": request.form.get("port_%d" % i, ""),
+                        "host": request.form.get("host_%d" % i, ""),
+                        "target_port": request.form.get("tport_%d" % i, "80"),
+                        "expose": request.form.get("expose_%d" % i, "tunnel"),
+                        "enabled": request.form.get("on_%d" % i) == "1",
+                    })
+                i += 1
+            try:
+                saved = settings.set_forwards(
+                    rows, attached=_attached.get(),
+                    reserved_ports=(int(web.get("port", 8080)),))
+            except ValueError as e:
+                err = str(e)
+            else:
+                msg = ("%d forward(s) saved; they are live within a few seconds"
+                       % len(saved))
+        return _settings_page("forwarding", fwd_err=err, fwd_msg=msg)
 
     @app.route("/settings/wifi", methods=["GET", "POST"])
     @protected
