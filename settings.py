@@ -406,6 +406,27 @@ class Settings:
                     (" for " + ", ".join(str(n) for n in nets)) if nets else "")
         return nets
 
+    # --------------------------------------------------------- manager mode
+    # Signing in has to survive a restart, or every service bounce would log
+    # the wall panel out. The key is random, kept with the settings (mode 600
+    # on the recording volume), and never leaves the board -- the cookie is
+    # only an HMAC over an expiry time.
+    def manager_key(self):
+        key = self.get("manager_key")
+        if not key:
+            key = _secrets.token_hex(32)
+            with self._lock:
+                self._data["manager_key"] = key
+                self._save()
+        return key
+
+    def new_manager_key(self):
+        """Invalidate every signed-in browser at once."""
+        with self._lock:
+            self._data["manager_key"] = _secrets.token_hex(32)
+            self._save()
+        return self._data["manager_key"]
+
     # ----------------------------------------------------- protecting setup
     # Trusted networks exist so the wall panel is not a password prompt. That
     # is right for watching, and wrong for changing things: the tablet hangs
@@ -601,6 +622,7 @@ class Settings:
             changed = False
             for k in ("protect_settings", "protect_manual"):
                 changed = self._data.pop(k, None) is not None or changed
+            self._data.pop("manager_key", None)
             for k in ("web_auth_mode", "web_trusted_networks"):
                 if k in self._data:
                     del self._data[k]

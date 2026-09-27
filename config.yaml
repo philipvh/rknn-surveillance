@@ -138,6 +138,12 @@ web:
   idle_fps: 1                # slower refresh when nobody is touching it
   aim_fps: 6                 # the near-live aiming picture-in-picture
 
+  # Manager mode. When the settings pages or manual control are password-
+  # protected, "Sign in as manager" unlocks both for this long and then goes
+  # back on its own -- so a wall panel someone unlocked and walked away from
+  # does not stay unlocked. Sign out is immediate.
+  manager_minutes: 30
+
   # Metered links. Video is the only thing here big enough to matter on a data
   # bundle: measured on the club board, the overlay view runs about 0.8 GB an
   # hour and the aiming feed over 3, and a 5 GB bundle went in a day with 92%

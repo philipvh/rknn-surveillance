@@ -197,15 +197,24 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
         </div>
         {% endif %}
         <a class="big" href="/media">Stills &amp; clips</a>
+        {% if needs_manager %}
+        <a class="big" href="/signin">Sign in as manager</a>
+        <p class="sub">Unlocks the Manual tab and Settings. Watching needs
+          nothing.</p>
+        {% else %}
         <a class="big" href="/settings">Settings</a>
+        {% if is_manager %}
+        <p class="sub">Signed in as manager &mdash; {{ manager_left_min }} min
+          left. <a href="/signout">Sign out</a></p>
+        {% endif %}
+        {% endif %}
         <div id="datause" class="dataline"></div>
       </div>
 
       <div class="pane" id="pane-manual">
       {% if manual_locked %}
-        <p class="sub">Manual control needs the panel password. Open
-          <a href="/settings">Settings</a> and sign in, or use a device that
-          is signed in.</p>
+        <p class="sub">Manual control needs the panel password.
+          <a href="/signin">Sign in as manager</a>.</p>
       {% endif %}
       {% if has_ptz %}
         <div class="dpad">

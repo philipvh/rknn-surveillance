@@ -725,7 +725,10 @@ class TestEveryRouteIsProtected(Base):
 
     # Deliberately open: healthz returns {ok:true} and nothing else, and
     # index.html only redirects to the panel, which is itself protected.
-    OPEN = {"/healthz", "/index.html", "/static/<path:filename>"}
+    # /signout only ever clears the caller's own cookie. Demanding a password
+    # to sign out is a trap, not a safeguard -- and it proves nothing, since
+    # anyone can drop a cookie themselves.
+    OPEN = {"/healthz", "/index.html", "/static/<path:filename>", "/signout"}
 
     def test_no_route_answers_without_credentials(self):
         leaked = []
@@ -1506,6 +1509,148 @@ class TestManualControlCanBeHeldBack(Base):
         self.store.set_protect_manual(True)
         self.store.clear_access()
         self.assertFalse(self.store.protect_manual())
+
+
+class TestManagerSignIn(Base):
+    """One honest button instead of a hidden tab and a browser prompt.
+
+    Basic auth via XHR on the wall tablet's browser can throw a prompt in the
+    middle of a video stream, and there is no way to sign out of it short of
+    closing the browser. A short-lived signed cookie is friendlier and, more
+    to the point, revocable.
+    """
+
+    LOCAL = {"REMOTE_ADDR": "192.168.92.5"}
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                              schedule=self.sched, settings=self.store)
+        self.app.config["TESTING"] = True
+        self.c = self.app.test_client()
+        self.store.set_web_credentials("keeper", "s3cret-long")
+        self.store.set_auth_mode("trusted", ["192.168.92.0/24"])
+        self.store.set_protect_manual(True)
+        self.store.set_protect_settings(True)
+
+    def creds(self, user="keeper", pw="s3cret-long"):
+        tok = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        return {"Authorization": "Basic " + tok}
+
+    def sign_in(self):
+        r = self.c.get("/signin", headers=self.creds(),
+                       environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 302)
+        return r
+
+    # --------------------------------------------------------------- panel
+    def test_the_panel_offers_signing_in_instead_of_settings(self):
+        body = self.c.get("/", environ_base=self.LOCAL).data
+        self.assertIn(b"Sign in as manager", body)
+        self.assertNotIn(b'href="/settings"', body)
+        self.assertNotIn(b'data-tab="manual"', body)
+
+    def test_after_signing_in_the_panel_is_whole_again(self):
+        self.sign_in()
+        body = self.c.get("/", environ_base=self.LOCAL).data
+        self.assertIn(b'data-tab="manual"', body)
+        self.assertIn(b'href="/settings"', body)
+        self.assertIn(b"Sign out", body)
+        self.assertNotIn(b"Sign in as manager", body)
+
+    # ----------------------------------------------------------- the lock
+    def test_signing_in_unlocks_manual_and_settings(self):
+        self.sign_in()
+        self.assertNotEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+        self.assertEqual(
+            self.c.get("/settings", environ_base=self.LOCAL).status_code, 200)
+
+    def test_signing_out_locks_it_again(self):
+        self.sign_in()
+        self.c.get("/signout", environ_base=self.LOCAL)
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    def test_signin_itself_never_takes_the_trusted_shortcut(self):
+        """Otherwise the wall panel signs itself in and the lock is theatre."""
+        r = self.c.get("/signin", environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 401)
+
+    def test_a_wrong_password_grants_nothing(self):
+        r = self.c.get("/signin", headers=self.creds(pw="wrong-one-here"),
+                       environ_base=self.LOCAL)
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    # --------------------------------------------------------- the cookie
+    def test_a_forged_cookie_is_refused(self):
+        self.c.set_cookie("mgr", "%d.%s" % (int(time.time()) + 9999, "0" * 32),
+                          domain="localhost")
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    def _signed(self, exp):
+        """A cookie signed with the real key, so only the clock is at issue.
+
+        The first version of this test moved the expiry into the past and left
+        the old signature, which the HMAC check rejected -- so it passed with
+        the expiry check deleted and proved nothing.
+        """
+        import hashlib as _h, hmac as _hm
+        key = self.store.manager_key().encode()
+        sig = _hm.new(key, str(int(exp)).encode(), _h.sha256).hexdigest()[:32]
+        return "%d.%s" % (int(exp), sig)
+
+    def test_an_expired_cookie_is_refused(self):
+        self.c.set_cookie("mgr", self._signed(time.time() - 10),
+                          domain="localhost")
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401, "a correctly signed but expired cookie was accepted")
+
+    def test_a_validly_signed_future_cookie_is_accepted(self):
+        """The other half, so the test above is about the clock and not about
+        the signature happening to fail."""
+        self.c.set_cookie("mgr", self._signed(time.time() + 600),
+                          domain="localhost")
+        self.assertNotEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    def test_the_expiry_cannot_be_pushed_out(self):
+        r = self.sign_in()
+        cookie = r.headers["Set-Cookie"].split(";")[0].split("=", 1)[1]
+        _exp, sig = cookie.split(".", 1)
+        self.c.set_cookie("mgr", "%d.%s" % (int(time.time()) + 86400, sig),
+                          domain="localhost")
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    def test_the_cookie_is_httponly(self):
+        r = self.sign_in()
+        self.assertIn("HttpOnly", r.headers["Set-Cookie"])
+
+    def test_rotating_the_key_signs_everybody_out(self):
+        self.sign_in()
+        self.store.new_manager_key()
+        self.assertEqual(
+            self.c.post("/api/ptz/stop", environ_base=self.LOCAL).status_code,
+            401)
+
+    def test_watching_never_needs_any_of_this(self):
+        self.assertEqual(
+            self.c.get("/", environ_base=self.LOCAL).status_code, 200)
 
 
 class TestMeteredLink(Base):

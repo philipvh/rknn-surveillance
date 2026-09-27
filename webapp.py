@@ -155,6 +155,10 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         if settings is not None and _have_password():
             strict = ((area == "settings" and settings.protect_settings())
                       or (area == "manual" and settings.protect_manual()))
+            # Signed in as manager: the password was already given, and asking
+            # again on every PTZ press would make the feature unusable.
+            if strict and is_manager():
+                strict = False
         if mode == "open" and not strict:
             return True
         if mode == "trusted" and not strict and settings is not None:
@@ -190,6 +194,47 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                 return _unauthorised(cfg.site_name)
             return fn(*a, **kw)
         return wrapper
+
+    # --------------------------------------------------------- manager mode
+    # The alternative was a browser Basic-auth prompt, which on the wall
+    # tablet's browser can surface mid-stream out of an XHR and cannot be
+    # signed out of without closing the browser. A short-lived signed cookie
+    # is both friendlier and easier to revoke: it carries nothing but an
+    # expiry and an HMAC of it, and the key lives only on the board.
+    MANAGER_COOKIE = "mgr"
+
+    def _manager_minutes():
+        return max(1, int(web.get("manager_minutes", 30)))
+
+    def _manager_token(now=None):
+        exp = int((now or time.time()) + _manager_minutes() * 60)
+        key = settings.manager_key().encode()
+        sig = hmac.new(key, str(exp).encode(), hashlib.sha256).hexdigest()[:32]
+        return "%d.%s" % (exp, sig)
+
+    def _manager_ok(token, now=None):
+        if not token or settings is None:
+            return False
+        try:
+            raw_exp, sig = str(token).split(".", 1)
+            exp = int(raw_exp)
+        except (ValueError, AttributeError):
+            return False
+        if exp < (now or time.time()):
+            return False
+        key = settings.manager_key().encode()
+        want = hmac.new(key, str(exp).encode(), hashlib.sha256).hexdigest()[:32]
+        return hmac.compare_digest(want, sig)
+
+    def is_manager():
+        return _manager_ok(request.cookies.get(MANAGER_COOKIE))
+
+    def manager_expires_in():
+        tok = request.cookies.get(MANAGER_COOKIE) or ""
+        try:
+            return max(0, int(tok.split(".", 1)[0]) - int(time.time()))
+        except (ValueError, IndexError):
+            return 0
 
     def protected_manual(fn):
         """The controls that move the camera and set the sweep.
@@ -320,6 +365,12 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                      and check_auth(area="manual")),
             manual_locked=(ptz is not None and getattr(ptz, "enabled", True)
                            and not check_auth(area="manual")),
+            # Rather than a hidden tab and a button that throws a browser
+            # prompt, the panel offers one honest control: sign in.
+            needs_manager=(not check_auth(area="manual")
+                           or not check_auth(area="settings")),
+            is_manager=is_manager(),
+            manager_left_min=(manager_expires_in() + 59) // 60,
             has_speaker=announcer is not None and announcer.enabled,
             has_detector=live is not None,
             has_media=True,
@@ -523,6 +574,38 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         except (OSError, ValueError, SyntaxError):
             log.warning("could not read the model class list", exc_info=True)
         return list(LIKELY)
+
+    @app.route("/signin")
+    def signin():
+        """Ask for the password once, then unlock manual and settings.
+
+        Deliberately a route of its own rather than letting the browser
+        stumble into a 401 from an XHR: on the wall tablet that surfaces a
+        prompt in the middle of a video stream, and there is no way to sign
+        out again short of closing the browser.
+        """
+        # Always the password here, never the trusted-network shortcut --
+        # this route exists precisely to prove who is asking.
+        a = request.authorization
+        if not a or not _verify(a.username or "", a.password or ""):
+            return _unauthorised(cfg.site_name)
+        resp = redirect(request.args.get("next") or url_for("panel"))
+        if settings is None:
+            # No store, so no manager mode to grant. The credentials the
+            # browser just gave still work on their own; nothing to add.
+            return resp
+        resp.set_cookie(MANAGER_COOKIE, _manager_token(),
+                        max_age=_manager_minutes() * 60,
+                        httponly=True, samesite="Lax", path="/")
+        log.info("signed in as manager from %s for %d minutes",
+                 request.remote_addr, _manager_minutes())
+        return resp
+
+    @app.route("/signout", methods=["GET", "POST"])
+    def signout():
+        resp = redirect(url_for("panel"))
+        resp.delete_cookie(MANAGER_COOKIE, path="/")
+        return resp
 
     @app.route("/settings", methods=["GET", "POST"])
     @protected_settings
