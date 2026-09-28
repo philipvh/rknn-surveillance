@@ -234,30 +234,50 @@ class Forwarder:
     at the camera.
     """
 
-    def __init__(self, settings, tun="tun0", poll_s=5.0):
+    def __init__(self, settings, tun="tun0,tailscale0", poll_s=5.0):
         self.settings = settings
         self.tun = tun
+        self.tun_ifaces = [t.strip() for t in str(tun).split(",") if t.strip()]
         self.poll_s = float(poll_s)
         self._running = {}          # key -> (server, thread, name)
         self._stop = threading.Event()
         self._last_warn = None
 
-    def bind_for(self, fwd):
+    def binds_for(self, fwd):
+        """Where a forward should listen. A list, because "the tunnel" is no
+        longer one thing.
+
+        There are two private ways in now -- OpenVPN for development and
+        Tailscale for a phone -- and "expose: tunnel" means both of them, not
+        whichever happens to be checked first. Listening on one and not the
+        other produced a forward that was allowed by the ACL and still
+        refused the connection, which is a confusing way to spend an evening.
+
+        It deliberately does NOT fall back to 0.0.0.0 when no tunnel has an
+        address. A forward that quietly appears on the club wifi because the
+        VPN was down is the opposite of what "tunnel only" asked for.
+        """
         if fwd["expose"] == "local":
-            return "0.0.0.0"
-        return tunnel_address(self.tun)
+            return ["0.0.0.0"]
+        out = []
+        for iface in self.tun_ifaces:
+            addr = tunnel_address(iface)
+            if addr and addr not in out:
+                out.append(addr)
+        return out
 
     def desired(self):
         out = {}
         for fwd in self.settings.forwards:
             if not fwd.get("enabled", True):
                 continue
-            bind = self.bind_for(fwd)
-            if not bind:
-                self._warn("%s wants the tunnel, which has no address yet"
+            binds = self.binds_for(fwd)
+            if not binds:
+                self._warn("%s wants a tunnel, and none has an address yet"
                            % fwd["name"])
                 continue
-            out[_key(fwd, bind)] = fwd
+            for bind in binds:
+                out[_key(fwd, bind)] = fwd
         return out
 
     def _warn(self, msg):
@@ -311,7 +331,8 @@ class Forwarder:
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--tun", default="tun0")
+    ap.add_argument("--tun", default="tun0,tailscale0",
+                    help="comma-separated; a forward exposed to \"tunnel\" listens on each one that has an address")
     ap.add_argument("--poll", type=float, default=5.0)
     ap.add_argument("--config", default=None, help="config.yaml to read")
     args = ap.parse_args(argv)

@@ -145,7 +145,7 @@ class TestForwarder(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.s = Settings(Path(self.tmp.name) / "settings.json")
         self.f = forwarder.Forwarder(self.s, poll_s=0.01)
-        self.f.bind_for = lambda fwd: "127.0.0.1"
+        self.f.binds_for = lambda fwd: ["127.0.0.1"]
         self.addCleanup(self.f.stop)
 
     def ports(self):
@@ -178,9 +178,54 @@ class TestForwarder(unittest.TestCase):
                       "the untouched forward was torn down and rebuilt")
 
     def test_a_tunnel_forward_waits_rather_than_binding_anywhere(self):
-        self.f.bind_for = self.mod.Forwarder.bind_for.__get__(self.f)
-        self.f.tun = "nosuchtun0"
+        """It must not fall back to 0.0.0.0: a forward that quietly appears on
+        the club wifi because the VPN is down is the opposite of what
+        'tunnel only' asked for."""
+        self.f.binds_for = self.mod.Forwarder.binds_for.__get__(self.f)
+        self.f.tun_ifaces = ["nosuchtun0"]
         self.s.set_forwards([fwd()], attached=ATTACHED)
         self.f.reconcile()
         self.assertEqual(self.ports(), [],
                          "it bound somewhere the operator did not ask for")
+
+
+class TestBindsForEveryPrivatePath(unittest.TestCase):
+    """There are two private ways in now -- OpenVPN for development, Tailscale
+    for a phone. A forward exposed to "the tunnel" has to answer on both, or
+    it is allowed by the ACL and still refuses the connection."""
+
+    def setUp(self):
+        use_club_routes(self)
+        import forwarder
+        self.mod = forwarder
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.s = Settings(Path(self.tmp.name) / "settings.json")
+        self.f = forwarder.Forwarder(self.s, tun="tunA,tunB", poll_s=0.01)
+        self.addrs = {"tunA": "10.8.2.6", "tunB": "100.115.218.100"}
+        self.mod.tunnel_address = lambda iface: self.addrs.get(iface)
+        self.addCleanup(setattr, self.mod, "tunnel_address",
+                        forwarder.tunnel_address)
+
+    def test_it_listens_on_each_tunnel_that_has_an_address(self):
+        self.assertEqual(self.f.binds_for(fwd()),
+                         ["10.8.2.6", "100.115.218.100"])
+
+    def test_a_tunnel_with_no_address_is_skipped_not_fatal(self):
+        self.addrs.pop("tunA")
+        self.assertEqual(self.f.binds_for(fwd()), ["100.115.218.100"])
+
+    def test_it_never_falls_back_to_every_interface(self):
+        self.addrs.clear()
+        self.assertEqual(self.f.binds_for(fwd()), [])
+
+    def test_expose_local_is_still_one_socket_everywhere(self):
+        self.assertEqual(self.f.binds_for(fwd(expose="local")), ["0.0.0.0"])
+
+    def test_the_same_address_twice_is_not_bound_twice(self):
+        self.addrs["tunB"] = "10.8.2.6"
+        self.assertEqual(self.f.binds_for(fwd()), ["10.8.2.6"])
+
+    def test_one_forward_becomes_a_listener_per_tunnel(self):
+        self.s.set_forwards([fwd()], attached=ATTACHED)
+        self.assertEqual(len(self.f.desired()), 2)

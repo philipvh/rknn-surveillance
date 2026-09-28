@@ -80,8 +80,21 @@ case "${1:-status}" in
       -o /usr/share/keyrings/tailscale-archive-keyring.gpg || die "could not fetch the key"
     curl -fsSL "https://pkgs.tailscale.com/stable/${ID}/${VERSION_CODENAME}.tailscale-keyring.list" \
       -o /etc/apt/sources.list.d/tailscale.list || die "could not fetch the source list"
-    apt-get update -qq || die "apt update failed"
-    apt-get install -y tailscale || die "apt install failed"
+    # The package is 35 MB over a 4G link that drops. apt gives up after one
+    # read error by default, having spent the data; these make it retry and
+    # resume instead of starting the download again from nothing.
+    APT_OPTS=(-o Acquire::Retries=5
+              -o Acquire::http::Timeout=60
+              -o Acquire::https::Timeout=60
+              -o Acquire::http::No-Cache=false)
+    apt-get "${APT_OPTS[@]}" update -qq || die "apt update failed"
+    if ! apt-get "${APT_OPTS[@]}" install -y tailscale; then
+      echo "!!" >&2
+      echo "!!  If that was a read error partway through the download, the" >&2
+      echo "!!  link dropped rather than the repo being wrong. Just run this" >&2
+      echo "!!  again -- apt resumes from what it already has." >&2
+      die "apt install failed"
+    fi
     systemctl enable --now tailscaled
     say "installed $(tailscale version | head -1); it has joined nothing yet"
     say "next:  sudo bash $0 up"
