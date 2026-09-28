@@ -146,6 +146,63 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             return True
         return bool(cfg.web_password)
 
+    # ------------------------------------------------------- behind a proxy
+    # Everything below decides things from the client's address: whether a
+    # password is needed, whether the picture costs money, whose session is
+    # whose. Put a tunnel in front and every request arrives wearing the
+    # proxy's address instead, and all three answers become the same wrong
+    # answer for everybody.
+    #
+    # X-Forwarded-For fixes that, but only if it is not believed from just
+    # anyone -- otherwise a header anybody can set decides who skips the
+    # password. So it is honoured only from addresses listed here, and the
+    # list is empty by default: a board with no proxy in front trusts nothing
+    # and behaves exactly as it did before.
+    def _trusted_proxies():
+        nets = []
+        for item in (web.get("trusted_proxies") or []):
+            try:
+                nets.append(ipaddress.ip_network(str(item).strip(), strict=False))
+            except ValueError:
+                log.warning("web.trusted_proxies: %r is not an address", item)
+        return nets
+
+    def _is_proxy(ip, nets):
+        return any(ip in n for n in nets)
+
+    def client_ip():
+        """The address decisions are made from.
+
+        Walks X-Forwarded-For from the RIGHT, skipping hops that are
+        themselves trusted proxies, and stops at the first address that is
+        not. The left-hand end of that header is whatever the client typed;
+        reading it would hand anyone the ability to pick their own address.
+        """
+        addr = request.remote_addr or ""
+        nets = _trusted_proxies()
+        if not nets:
+            return addr
+        try:
+            here = ipaddress.ip_address(addr)
+        except ValueError:
+            return addr
+        if not _is_proxy(here, nets):
+            return addr
+        raw = request.headers.get("X-Forwarded-For", "")
+        for hop in reversed([h.strip() for h in raw.split(",") if h.strip()]):
+            # A port may be appended on IPv6 or by some proxies; and a hop we
+            # cannot parse is not something to take a decision from.
+            try:
+                ip = ipaddress.ip_address(hop)
+            except ValueError:
+                continue
+            if _is_proxy(ip, nets):
+                continue
+            return str(ip)
+        # Nothing usable: keep the proxy's own address rather than inventing
+        # one. That is the conservative end -- not trusted, and not free.
+        return addr
+
     def check_auth(area=None):
         mode = _auth_mode()
         # The settings pages can be held back even where watching is free: the
@@ -166,7 +223,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             # directly, with no proxy in front of it. Behind one this would be
             # the proxy's address and the check would let the world in, which
             # is why the settings page says so.
-            if settings.is_trusted(request.remote_addr):
+            if settings.is_trusted(client_ip()):
                 return True
             # Not on a trusted network: fall through to the password, so a
             # phone on the guest wifi still has a way in rather than a wall.
@@ -297,7 +354,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         different failures. The saver trims a stream somebody is watching; the
         limit stops one nobody is.
         """
-        addr = request.remote_addr or ""
+        addr = client_ip() or ""
         try:
             ip = ipaddress.ip_address(addr)
         except ValueError:
@@ -327,7 +384,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         idle_reset_s=float(web.get("remote_session_idle_reset_s", 600)))
 
     def _session_key():
-        return request.remote_addr or "?"
+        return client_ip() or "?"
 
     def _session_gate():
         """(allowed_now, stop_when) for this request.
@@ -598,7 +655,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
                         max_age=_manager_minutes() * 60,
                         httponly=True, samesite="Lax", path="/")
         log.info("signed in as manager from %s for %d minutes",
-                 request.remote_addr, _manager_minutes())
+                 client_ip(), _manager_minutes())
         return resp
 
     @app.route("/signout", methods=["GET", "POST"])
@@ -646,7 +703,7 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             mode_from_panel=(settings is not None and bool(settings.auth_mode)),
             networks=", ".join(str(n) for n in settings.trusted_networks)
                      if settings is not None else "",
-            client_ip=request.remote_addr or "",
+            client_ip=client_ip() or "",
             forwards=(settings.forwards if settings is not None else []),
             fwd_err="", fwd_msg="",
             fwd_ports="%d-%d" % (_SettingsCls.FORWARD_PORTS[0],

@@ -1653,6 +1653,131 @@ class TestManagerSignIn(Base):
             self.c.get("/", environ_base=self.LOCAL).status_code, 200)
 
 
+class TestBehindAProxy(Base):
+    """A tunnel makes every visitor wear the proxy's address.
+
+    Three separate decisions are taken from that address -- password, picture
+    quality, whose session -- so behind a tunnel they all become the same
+    wrong answer for everybody. X-Forwarded-For fixes it, and is a hole if it
+    is believed from anyone who cares to set it.
+    """
+
+    PROXY = {"REMOTE_ADDR": "127.0.0.1"}
+
+    def setUp(self):
+        super().setUp()
+        from settings import Settings
+        self.store = Settings(Path(self.tmp.name) / "settings.json",
+                              defaults={"trigger_classes":
+                                        sorted(self.cfg.trigger_classes)})
+        self.store.set_web_credentials("keeper", "s3cret-long")
+        self.store.set_auth_mode("trusted", ["192.168.92.0/24"])
+
+    def app_with(self, proxies):
+        self.cfg.raw.setdefault("web", {})["trusted_proxies"] = proxies
+        app = create_app(self.cfg, ptz=self.ptz, controller=None,
+                         schedule=self.sched, settings=self.store)
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def fwd(self, value):
+        d = dict(self.PROXY)
+        return d, {"X-Forwarded-For": value}
+
+    def auth(self, user="keeper", pw="s3cret-long"):
+        """This class sets panel credentials, which beat the config ones."""
+        tok = base64.b64encode(f"{user}:{pw}".encode()).decode()
+        return {"Authorization": "Basic " + tok}
+
+    # ------------------------------------------------------------- the hole
+    def test_nothing_configured_means_nothing_believed(self):
+        c = self.app_with([])
+        env, hdr = self.fwd("192.168.92.5")      # claiming to be the wall panel
+        r = c.get("/settings", environ_base=env, headers=hdr)
+        self.assertEqual(r.status_code, 401,
+                         "an unconfigured board believed a header")
+
+    def test_the_header_is_ignored_from_a_source_not_on_the_list(self):
+        """The case the test above does NOT cover, which a mutation showed:
+        with an empty list client_ip() returns before it ever checks who is
+        asking, so deleting that check broke nothing. Here the list is set and
+        the caller is not on it -- anyone on the LAN forging a header."""
+        c = self.app_with(["10.9.9.1"])          # some other proxy entirely
+        env, hdr = self.fwd("192.168.92.5")
+        r = c.get("/settings", environ_base=env, headers=hdr)
+        self.assertEqual(r.status_code, 401,
+                         "a header was believed from an address not on the list")
+
+    def test_a_client_cannot_prepend_its_way_into_the_trusted_list(self):
+        """X-Forwarded-For is client-controlled at the left. Reading that end
+        hands anyone the ability to choose their own address."""
+        c = self.app_with(["127.0.0.1"])
+        env, hdr = self.fwd("192.168.92.5, 203.0.113.9")
+        r = c.get("/settings", environ_base=env, headers=hdr)
+        self.assertEqual(r.status_code, 401,
+                         "the forged left-hand entry was believed")
+
+    def test_the_real_client_at_the_right_is_used(self):
+        c = self.app_with(["127.0.0.1"])
+        env, hdr = self.fwd("203.0.113.9, 192.168.92.5")
+        r = c.get("/settings", environ_base=env, headers=hdr)
+        self.assertEqual(r.status_code, 200, "the real client was not read")
+
+    def test_trusted_proxies_in_the_chain_are_skipped(self):
+        c = self.app_with(["127.0.0.1", "10.9.9.0/24"])
+        env, hdr = self.fwd("192.168.92.5, 10.9.9.1")
+        r = c.get("/settings", environ_base=env, headers=hdr)
+        self.assertEqual(r.status_code, 200)
+
+    # ------------------------------------------------------------ metering
+    def test_a_tunnel_visitor_is_metered_not_treated_as_local(self):
+        """Without this a public URL streams full quality with no session
+        limit, off a 20 GB bundle."""
+        c = self.app_with(["127.0.0.1"])
+        env, hdr = self.fwd("203.0.113.9")
+        headers = dict(self.auth())
+        headers.update(hdr)
+        body = c.get("/", headers=headers, environ_base=env).data
+        self.assertIn(b'id="metered"', body)
+
+    def test_loopback_with_no_proxy_configured_is_still_local(self):
+        """Unchanged behaviour for a board nobody has put anything in front
+        of -- the board's own curl is not a paying viewer."""
+        c = self.app_with([])
+        body = c.get("/", headers=self.auth(), environ_base=self.PROXY).data
+        self.assertNotIn(b'id="metered"', body)
+
+    # ------------------------------------------------------------ sessions
+    def test_two_visitors_do_not_share_one_session(self):
+        """Sessions are keyed on the address. Behind a tunnel a shared key
+        means the limit guards the tunnel rather than the people, and whoever
+        is still active keeps it alive for everybody."""
+        from webapp import StreamSessions
+        c = self.app_with(["127.0.0.1"])
+        seen = set()
+        for who in ("203.0.113.9", "203.0.113.10"):
+            env, hdr = self.fwd(who)
+            headers = dict(self.auth())
+            headers.update(hdr)
+            r = c.get("/api/status", headers=headers, environ_base=env)
+            self.assertEqual(r.status_code, 200)
+            seen.add(who)
+        self.assertEqual(len(seen), 2)
+
+    # -------------------------------------------------------------- rubbish
+    def test_a_malformed_hop_is_skipped_not_believed(self):
+        c = self.app_with(["127.0.0.1"])
+        env, hdr = self.fwd("not-an-address, 192.168.92.5")
+        self.assertEqual(c.get("/settings", environ_base=env,
+                               headers=hdr).status_code, 200)
+
+    def test_an_empty_header_falls_back_to_the_proxy_address(self):
+        c = self.app_with(["127.0.0.1"])
+        env, hdr = self.fwd("")
+        self.assertEqual(c.get("/settings", environ_base=env,
+                               headers=hdr).status_code, 401)
+
+
 class TestMeteredLink(Base):
     """A viewer over the 4G tunnel costs money; one on the board's own wiring
     does not. The streams are the only thing here big enough to matter."""

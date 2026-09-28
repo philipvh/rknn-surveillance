@@ -165,6 +165,20 @@ web:
   # Anything listed here is treated as free IN ADDITION, for a site where some
   # free network is reached through a router rather than directly.
   local_networks: []
+
+  # Addresses whose X-Forwarded-For is believed. Empty means none, which is
+  # right for a board reached directly. Fill it in ONLY when something else
+  # terminates the connection -- a tunnel (cloudflared, tailscale funnel) or a
+  # reverse proxy -- and list that thing's address, not the client's.
+  #
+  # Without it, every visitor through a tunnel arrives wearing the proxy's
+  # address: one shared session, so the session limit guards the tunnel rather
+  # than the people, and one shared answer to "does this viewer cost money".
+  #
+  # Do NOT solve a password prompt by adding a proxy address to the trusted
+  # networks instead. That is the natural thing to try when the prompt gets
+  # annoying, and it turns a public URL into an open one.
+  trusted_proxies: []
   metered_fps: 1             # frames per second for a remote viewer
   metered_scale: 480         # and how wide
   metered_quality: 12        # ffmpeg -q:v; higher is smaller and coarser
