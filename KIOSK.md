@@ -33,6 +33,36 @@ segment `setup_network.sh` does the same. Either way the kiosk URL is:
 Verified against the AP's own resolver: `panel` and `panel.local` both answer
 192.168.92.1.
 
+### When the tablet is on the 4G router's wifi instead
+
+The board's AP runs on an RTL8188CUS -- 1x1, 2.4 GHz, and the `rtl8192cu`
+driver buffers for a sleeping client, which shows up as latency that alternates
+between a couple of milliseconds and a full second:
+
+    ping every 0.2s (continuous)   avg  8.0 ms   max   14 ms
+    ping every 1.0s                alternating 2 ms / 1000 ms
+    ping every 3.0s                295 -> 447 ms, climbing
+
+Under continuous traffic it is fine; every gap is an invitation to doze, and
+`idle_fps: 1` sits exactly at the wake interval. If that makes the panel crawl,
+put the tablet on the 4G router's wifi instead. Three things follow:
+
+* **Forget the board's AP on the tablet.** Selecting the other network is not
+  enough -- the AP shares the board's uplink, so to Android it is a perfectly
+  good network with internet, at full signal, with autoconnect priority 100.
+  It will go back to it.
+* **The URL does not change to the tablet's address.** It stays the *board's*
+  address on that LAN (`http://192.168.8.172:8081`). The tablet's own address
+  is what the trusted-network check sees, and they are different machines.
+* **Reserve the tablet's address** on the router, and set the tablet's wifi
+  privacy to *Use device MAC* first -- Android's per-SSID random MAC changes
+  when you forget and rejoin, and the reservation would then point at nothing.
+
+The tablet's own video now crosses the uplink NIC on its way back, which is
+why usage is counted with iptables counters that skip directly-attached
+subnets rather than by reading the interface totals. Without that it would
+book 10-19 GB a day of mobile data that never left the building.
+
 ### Which mode comes back after a power cut
 
 Whichever one was chosen last. `wifi_mode.sh` writes the decision into
@@ -72,6 +102,55 @@ So the kiosk stores no credentials, and the login still stands for anything
 arriving from outside those. Narrow the list from the panel if the lab LAN or
 the tunnel should not be on it. If a change ever locks you out, ssh in and use
 `./settings_cli.py trusted <net>` or `./settings_cli.py password`.
+
+### Watching is not the same as changing
+
+Trusted networks answer *who can watch without a password*. They are the wrong
+answer for *who can change things*: the tablet hangs in a room anyone at the
+club can walk into, and from the panel you can re-aim the camera, redefine
+where the sweep stops, publish a device on a board port, or set a new password.
+
+Two switches on the same screen separate the two, and they are independent
+because the risks are -- a club might want a committee member able to swing the
+camera without also handing them the page that sets passwords:
+
+* **Always ask for the password on these Settings pages**
+* **Always ask for the password for manual control** -- the Manual tab: moving
+  the camera, and setting where the sweep stops
+
+Neither touches watching. Both apply **everywhere, the tunnel included**: a
+lock the VPN skipped would only stop people standing in the room, which is not
+the threat.
+
+With either on, the View tab replaces the Settings button with **Sign in as
+manager**, and the Manual tab is hidden rather than left there doing nothing.
+Signing in unlocks both, shows the minutes remaining, and offers Sign out.
+
+    Stills & clips
+    Sign in as manager      <- unlocks the Manual tab and Settings
+
+It is a short-lived signed cookie, not a browser prompt. A Basic-auth box on
+this tablet can surface out of an XHR in the middle of a video stream, and
+there is no way out of it short of closing the browser. The cookie carries an
+expiry and an HMAC of that expiry; the key never leaves the board. It lapses
+after `web.manager_minutes` (30) so a panel somebody unlocked and walked away
+from re-locks itself, and it is **per origin** -- signing in on your laptop
+does not sign in the wall tablet.
+
+From the shell:
+
+    ./settings_cli.py protect on both      # settings and manual
+    ./settings_cli.py protect off manual   # just the Manual tab again
+    ./settings_cli.py show                 # each flag, beside its undo
+
+It refuses to switch on when no password is set, because the first screen it
+would lock is the one where you would set one.
+
+**Do not put the panel password into the kiosk browser** if you want these to
+mean anything. Stored credentials satisfy both prompts automatically, and the
+tablet is back to being a device anyone can change the system from. Trust the
+tablet by address instead (below) and keep the password as the thing a human
+types.
 
 ## Browser
 
@@ -171,8 +250,20 @@ on that segment longer than the setup takes.
 
 (The firewall rules behind this were not inspected: reading them needs root
 and `sudo -n` is not granted on the board. The behaviour above is what
-`ipv4.method shared` is defined to do, not something observed here.) The panel's password is not there to stop attackers so
-much as to stop accidents; the club wifi is not a trust boundary.
+`ipv4.method shared` is defined to do, not something observed here.)
+
+The panel's password is not there to stop attackers so much as to stop
+accidents; the club wifi is not a trust boundary. What *is* worth taking
+seriously is physical access to the tablet, which is why manual control and
+the settings pages can be held behind a sign-in even on a trusted network --
+see [Watching is not the same as changing](#watching-is-not-the-same-as-changing).
+
+If the tablet is moved onto the club wifi, resist trusting that whole subnet:
+anyone who knows the wifi password would then reach the panel with no login.
+Trust the tablet's reserved address alone (`192.168.8.x/32`) and keep a
+password for everything else -- and know what that buys, which is "possession
+of an address" as the credential. Anyone on that wifi could take the address
+while the tablet is off. It raises the bar; it is not a wall.
 
 ## What the panel does
 
@@ -186,3 +277,7 @@ much as to stop accidents; the club wifi is not a trust boundary.
 * **Disarm 2h / Arm now / Back to schedule**: alerting overrides that expire
   on their own, so nobody can leave the system silenced permanently.
 * **Recordings**: event clips first, newest first.
+* **Data used**: today's figure against the bundle, on the View tab. Counts
+  only what actually crossed the mobile link.
+* **Sign in as manager**: shown in place of Settings when the settings pages
+  or manual control are protected. Unlocks both for 30 minutes.

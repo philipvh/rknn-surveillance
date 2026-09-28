@@ -77,13 +77,28 @@ The panel is then on `http://<board>:8081/`.
 `./deploy.sh user@board --watch --restart` re-syncs on every save while you
 work on it, and restarts the service.
 
+Two optional services, each installed once and configured from the panel
+afterwards:
+
+```bash
+sudo bash forwarder.sh install   # publish device pages (Settings -> Forwarding)
+sudo bash wan_meter.sh install   # count only the traffic that leaves the site
+```
+
+Neither is needed to record. Skip the meter if the uplink is not metered, and
+skip the forwarder if nothing sits on a segment you cannot already reach.
+
 ## What it does
 
 **Recording.** Two states. `ready` keeps one minute as pre-roll and throws the
 rest away. A trigger — the detector or the PIR — switches to `triggered`, where
 every minute is kept and an annotated still is written each second. A minute
 with no trigger returns it to `ready`, at which point the minutes become one
-clip and the sources are deleted. Clips are capped at ten minutes.
+clip and the sources are deleted. A clip is capped at ten minutes, and a
+window longer than that is **split into consecutive clips** rather than
+truncated -- keeping only the first ten minutes and letting the keeper reclaim
+the rest cost this club four days of footage once, and there is a test named
+after it.
 
 **Triggering.** Configurable COCO classes, tickable from the panel without a
 restart. Everything else is still detected and drawn dimmed on the live view,
@@ -100,6 +115,36 @@ ChaCha20-Poly1305 and a replay guard. The shadow log exists because the
 previous system at this club was abandoned after it flooded everyone with
 false alarms — see [the write-up](#the-write-up).
 
+**Access.** Watching and changing are separate questions. Trusted networks
+decide who can *watch* without a password; two independent switches decide
+whether the **settings pages** and **manual control** still ask for one even
+there. With either on, the panel shows a single *Sign in as manager* button in
+place of Settings -- a short-lived signed cookie rather than a browser prompt,
+because on an old tablet a Basic-auth box can surface out of an XHR mid-stream
+and cannot be signed out of. It lapses after `web.manager_minutes` (30), so a
+panel somebody unlocked and walked away from re-locks itself. Being on the VPN
+does not bypass it; a lock the tunnel skipped would only stop people standing
+in the room.
+
+**Forwarding.** A camera or router on a segment you cannot route to, published
+on a board port and configured from the panel (*Settings -> Forwarding*). It is
+a Host-rewriting reverse proxy, not an iptables DNAT: a DNAT leaves the HTTP
+payload alone, so it works only on devices that ignore `Host`. Measured here,
+the camera returns 200 for any `Host` while the 4G router redirects everything
+but its own address to an address the client cannot reach. Every entry is
+checked against the networks the board is *directly attached to*, so a forward
+cannot be pointed at the internet, at the far side of the tunnel, or at the
+board itself.
+
+**Metering.** On a mobile bundle, video is the only thing big enough to matter:
+the overlay view runs about 0.8 GB an hour. Remote viewers get a smaller,
+slower picture and a session that stops itself; viewers on the board's own
+wiring get the full thing. Which networks count as "own wiring" is read from
+the kernel's routing table, not configured -- tunnels excluded, because a
+viewer down the tunnel is exactly who costs money. Usage is counted with
+iptables counters that skip every directly-attached subnet, so the wall panel's
+own video is not billed as mobile data.
+
 ## Layout
 
 | | |
@@ -113,8 +158,11 @@ false alarms — see [the write-up](#the-write-up).
 | `camera/` | one file per camera make -- the only place a vendor protocol lives |
 | `link.py` `uplink.py` `transports.py` `receiver.py` | the radio link |
 | `settings.py` `settings_cli.py` | panel-editable settings, and the shell rescue |
+| `netinfo.py` | which networks this board is on, read from the routing table |
+| `forwarder.py` `forwarder.sh` | device web pages published on board ports |
+| `datausage.py` `wan_meter.sh` | the mobile bundle, counting only what leaves the site |
 | `doctor.py` | one command that says whether this install is healthy |
-| `setup_network.sh` `wan_ports.sh` `camera_ui.sh` | the camera segment, and reaching it over the tunnel |
+| `setup_network.sh` `wan_ports.sh` | the camera segment and the tunnel (`camera_ui.sh` is superseded by the forwarder) |
 
 ## Cameras
 
@@ -189,11 +237,21 @@ Declare what yours can do and let the rest raise.
 python3 -m unittest discover -s tests
 ```
 
-470 of them, no network and no hardware required. They are written against
+786 of them, no network and no hardware required. They are written against
 *behaviour* rather than implementation, and several exist because the thing
 they describe actually happened on the board — a sweep that deleted footage a
-queued cut still needed, an incident that only lived in memory, a browser that
-ignores `scrollIntoView` options. Those are the ones worth reading first.
+queued cut still needed, an incident that only lived in memory, a clip cap
+that discarded four days rather than splitting them, a recorder that died at
+midnight because a tidy-up removed the directory it was about to write to, a
+browser that ignores `scrollIntoView` options. Those are the ones worth
+reading first.
+
+Each one is checked by breaking the code it covers and confirming it fails.
+That habit has paid for itself repeatedly: an "expired cookie is refused" test
+passed with the expiry check deleted, because it had also broken the signature
+and was being rejected for the wrong reason; a "the wall tablet is never cut
+off" test opened its first stream from the remote address and checked the
+local one, so it passed with the exemption removed. Both were rewritten.
 
 ## The write-up
 
