@@ -267,7 +267,9 @@ schedule:
   always_armed: false
   armed:
     - {days: [mon, tue, wed, thu, fri], from: "22:30", to: "07:30"}
-    - {days: [sat, sun],                from: "21:00", to: "08:30"}
+    # The club plays until 23:00 at the weekend, so arming at 21:00 would
+    # have been alerting on the members.
+    - {days: [sat, sun],                from: "23:00", to: "08:30"}
 
 controller:
   lights_settle_s: 1.5       # PIR switches the floodlights; let exposure catch up
@@ -282,9 +284,11 @@ controller:
 # goes to the shadow log, and Phase 6 reads a fortnight of it to decide
 # whether the radio link is worth building.
 alerts:
-  shadow_only: true
+  shadow_only: false        # alerts are sent
   shadow_root: shadow
-  require_pir: true          # gate 2: the camera and the PIR must agree
+  # Gate 2, off because this site has no PIR wired: with it on, 636 of 710
+  # recorded incidents failed here and nothing would ever be sent.
+  require_pir: false
   min_duration_s: 4.0        # gate 3: persistence, not one lucky frame
   min_sightings: 3
   min_confidence: 0.7
@@ -304,9 +308,13 @@ alerts:
 # (`openssl rand -hex 16`) and treat it as a password. Nothing is sent while
 # alerts.shadow_only is true.
 notify:
-  enabled: false
+  enabled: true
   server: https://ntfy.sh   # or your own; the phone subscribes to the topic
-  priority: default         # min | low | default | high | urgent
+  # high, not default: this exists to wake somebody at 3am. It sounds and
+  # vibrates where default would sit quietly in the shade. The phone still
+  # needs ntfy exempted from battery optimisation and allowed through Do Not
+  # Disturb, neither of which anything here can set.
+  priority: high            # min | low | default | high | urgent
   attach_image: true        # the still from the incident
   image_width: 640          # downscaled before sending -- this is a bundle
   max_image_bytes: 307200   # skip the picture rather than send more than this
