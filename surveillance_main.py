@@ -29,6 +29,7 @@ import config
 import ptz as ptz_mod
 import recorder as recorder_mod
 import trigger as trigger_mod
+import notify as notify_mod
 from alerts import AlertPolicy, ShadowLog
 from annotated import AnnotatedClip
 from capture import CaptureManager
@@ -190,9 +191,31 @@ def main(argv=None):
     shadow_root = cfg.resolve(
         cfg._get("alerts", "shadow_root", default="shadow"))
     shadow = ShadowLog(shadow_root)
-    if cfg._get("alerts", "shadow_only", default=True):
+    shadow_only = bool(cfg._get("alerts", "shadow_only", default=True))
+    if shadow_only:
         log.info("alerting is in SHADOW MODE: decisions are written to %s "
                  "and nothing is sent", shadow_root)
+
+    # Shadow mode has to mean nothing leaves the building, or the mode is a
+    # lie. A notifier built and then never called would still be a second
+    # place for that rule to be got wrong, so it is not built at all.
+    # NB: `notifier` above is systemd's watchdog. This one pushes to a phone;
+    # naming them the same thing would be a trap waiting for whoever reorders
+    # these lines next.
+    pusher = None
+    if not shadow_only:
+        pusher = notify_mod.from_config(cfg)
+        if pusher.configured:
+            klasses = policy.alert_classes
+            log.info("notifications to %s%s, only for %s", pusher.server,
+                     " with the still" if pusher.attach_image else "",
+                     ", ".join(sorted(klasses)) if klasses else "any trigger")
+        elif pusher.enabled:
+            log.warning("notify.enabled is set but no topic is configured; "
+                        "put one in secrets.yaml under notify.topic")
+            pusher = None
+        else:
+            pusher = None
 
     uplink = Uplink(cfg)
     uplink.start()
@@ -368,7 +391,7 @@ def main(argv=None):
     except Exception:
         log.exception("could not recover the interrupted incident")
 
-    controller = Controller(cfg, ptz, schedule, policy, shadow,
+    controller = Controller(cfg, ptz, schedule, policy, shadow, notifier=pusher,
                             clip_fn=cut_clip, snapshot_fn=take_snapshot,
                             mark_open_fn=mark_incident_open,
                             mark_done_fn=mark_incident_done,

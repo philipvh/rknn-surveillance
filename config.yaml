@@ -288,8 +288,29 @@ alerts:
   min_duration_s: 4.0        # gate 3: persistence, not one lucky frame
   min_sightings: 3
   min_confidence: 0.7
-  min_interval_s: 300        # gate 4: rate limit
+  # Gate 4: what is worth waking somebody for. Recording triggers on a wider
+  # set -- a cat crossing the court at 3am is still footage worth keeping --
+  # but it is not worth a phone buzzing. Leave empty to notify on any trigger.
+  alert_classes: [person, car, bus, truck, motorbike, bicycle]
+  min_interval_s: 300        # gate 5: rate limit
   max_per_day: 12
+
+# A push notification to a phone, with the still attached. The alert policy
+# above decides *whether*; this only carries the verdict, so there is one set
+# of rules about when to disturb somebody and not two.
+#
+# The topic and token live in secrets.yaml, not here: a topic on a public ntfy
+# server is readable by anyone who knows its name, so make it long and random
+# (`openssl rand -hex 16`) and treat it as a password. Nothing is sent while
+# alerts.shadow_only is true.
+notify:
+  enabled: false
+  server: https://ntfy.sh   # or your own; the phone subscribes to the topic
+  priority: default         # min | low | default | high | urgent
+  attach_image: true        # the still from the incident
+  image_width: 640          # downscaled before sending -- this is a bundle
+  max_image_bytes: 307200   # skip the picture rather than send more than this
+  retries: 2
 
 # The point-to-point radio out. Nothing is sent while alerts.shadow_only is
 # true -- Phase 6 has to say the volume is acceptable first.

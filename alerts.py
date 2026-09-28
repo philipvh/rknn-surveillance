@@ -118,6 +118,12 @@ class AlertPolicy:
         self.min_duration_s = float(c.get("min_duration_s", 4.0))
         self.min_sightings = int(c.get("min_sightings", 3))
         self.min_confidence = float(c.get("min_confidence", 0.7))
+        # What is worth waking someone for. Detection triggers recording on a
+        # wider set -- a cat crossing the court at 3am is still footage worth
+        # keeping -- but it is not worth a phone buzzing. Empty means "any
+        # class that triggered", i.e. the gate is off.
+        self.alert_classes = {str(x).strip().lower()
+                              for x in (c.get("alert_classes") or []) if str(x).strip()}
         self.min_interval_s = float(c.get("min_interval_s", 300))
         self.max_per_day = int(c.get("max_per_day", 12))
         self._clock = clock or dt.datetime.now
@@ -162,6 +168,16 @@ class AlertPolicy:
                                 f"best confidence {incident.max_confidence:.2f}, "
                                 f"minimum is {self.min_confidence:.2f}")
             passed.append("persistence")
+
+            if self.alert_classes:
+                seen = {str(l).strip().lower() for l in incident.labels}
+                worth = seen & self.alert_classes
+                if not worth:
+                    return Decision(False, passed, "class",
+                                    "saw %s, and none of those are worth "
+                                    "sending" % (", ".join(sorted(seen))
+                                                 or "nothing identifiable"))
+                passed.append("class")
 
             if self._today_count >= self.max_per_day:
                 return Decision(False, passed, "rate limit",

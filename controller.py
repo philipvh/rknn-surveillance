@@ -71,6 +71,7 @@ class Detection:
 class Controller:
     def __init__(self, cfg, ptz, schedule, policy, shadow_log,
                  clip_fn=None, snapshot_fn=None, tracker=None, announcer=None,
+                 notifier=None,
                  mark_open_fn=None, mark_done_fn=None,
                  annotated=None, capture=None, settings=None,
                  clock=None, wall=None):
@@ -90,6 +91,7 @@ class Controller:
         self.mark_open_fn = mark_open_fn or (lambda start: None)
         self.mark_done_fn = mark_done_fn or (lambda: None)
         self.snapshot_fn = snapshot_fn or (lambda: "")
+        self.notifier = notifier
         self.tracker = tracker
         self.announcer = announcer
         self.annotated = annotated
@@ -701,6 +703,13 @@ class Controller:
 
         decision = self.policy.evaluate(inc)
         self.shadow.record(inc, decision)
+        # The policy decides; this only carries the verdict. Shadow mode still
+        # means nothing leaves the building.
+        if decision.would_alert and self.notifier is not None:
+            try:
+                self.notifier.send_incident(inc)
+            except Exception:
+                log.exception("could not send the notification")
         self.incidents_closed += 1
         log.info("incident closed (%s): %s", why, inc.summary())
 
