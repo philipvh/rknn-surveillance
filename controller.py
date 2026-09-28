@@ -71,7 +71,7 @@ class Detection:
 class Controller:
     def __init__(self, cfg, ptz, schedule, policy, shadow_log,
                  clip_fn=None, snapshot_fn=None, tracker=None, announcer=None,
-                 notifier=None,
+                 notifier=None, kiosk=None,
                  mark_open_fn=None, mark_done_fn=None,
                  annotated=None, capture=None, settings=None,
                  clock=None, wall=None):
@@ -92,6 +92,7 @@ class Controller:
         self.mark_done_fn = mark_done_fn or (lambda: None)
         self.snapshot_fn = snapshot_fn or (lambda: "")
         self.notifier = notifier
+        self.kiosk = kiosk
         self.tracker = tracker
         self.announcer = announcer
         self.annotated = annotated
@@ -296,6 +297,9 @@ class Controller:
                 self._sweep_index = 0
                 self._deadline = None
                 self._go(State.SWEEPING, "sweep on trigger")
+                # Rung zero of the deterrence ladder: the wall lights up
+                # before the camera has finished turning.
+                self._wake_wall("sweep on trigger")
                 if self.announcer is not None:
                     try:
                         self.announcer.maybe_announce(self._incident)
@@ -303,6 +307,7 @@ class Controller:
                         log.exception("announcement failed")
         elif self._state in (State.SCANNING, State.SETTLING, State.PARKED):
             self._go(State.HOLDING, "person in view")
+            self._wake_wall("person in view")
             # Rung three of the deterrence ladder, once per incident: the
             # camera has already turned to face them by getting here.
             if self.announcer is not None:
@@ -382,6 +387,14 @@ class Controller:
         # Before anything else: a window that has run away is closed whatever
         # state the camera is in.
         self._enforce_incident_cap()
+        # Lets the screen go dark again once the wake window has passed. Here
+        # rather than on a timer of its own: tick() is already the thing that
+        # runs whether or not anything is happening.
+        if self.kiosk is not None:
+            try:
+                self.kiosk.tick()
+            except Exception:
+                log.exception("could not settle the wall panel")
         st = self.state
         handler = getattr(self, f"_tick_{st.value}", None)
         if handler:
@@ -712,6 +725,15 @@ class Controller:
                 log.exception("could not send the notification")
         self.incidents_closed += 1
         log.info("incident closed (%s): %s", why, inc.summary())
+
+    def _wake_wall(self, why):
+        """Light the wall panel. Never let it cost the incident anything."""
+        if self.kiosk is None:
+            return
+        try:
+            self.kiosk.wake(why)
+        except Exception:
+            log.exception("could not wake the wall panel")
 
     @property
     def triggered(self):

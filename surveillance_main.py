@@ -29,6 +29,7 @@ import config
 import ptz as ptz_mod
 import recorder as recorder_mod
 import trigger as trigger_mod
+import kiosk as kiosk_mod
 import notify as notify_mod
 from alerts import AlertPolicy, ShadowLog
 from annotated import AnnotatedClip
@@ -391,7 +392,16 @@ def main(argv=None):
     except Exception:
         log.exception("could not recover the interrupted incident")
 
+    wall = kiosk_mod.from_config(cfg)
+    if wall.configured:
+        log.info("the wall panel's screen will wake on a trigger for %.0fs "
+                 "(%s)", wall.wake_s, wall.host)
+    elif wall.enabled:
+        log.warning("kiosk.enabled is set but the host or the remote-admin "
+                    "password is missing; the screen will not be woken")
+
     controller = Controller(cfg, ptz, schedule, policy, shadow, notifier=pusher,
+                            kiosk=wall,
                             clip_fn=cut_clip, snapshot_fn=take_snapshot,
                             mark_open_fn=mark_incident_open,
                             mark_done_fn=mark_incident_done,

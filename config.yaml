@@ -313,6 +313,23 @@ alerts:
   min_interval_s: 300        # gate 5: rate limit
   max_per_day: 12
 
+# The wall panel's screen, as a deterrent rather than a display.
+#
+# Left on, the tablet outlasts its charger by a day or two and then dies --
+# measured on this one: 28 hours, then 41, then silence until it had charged
+# enough to boot itself. Left dark, it costs almost nothing, and lighting up
+# the moment the camera turns is the better warning anyway: a screen that is
+# always on is scenery, one that comes on as you walk up is about you.
+#
+# Needs Fully Kiosk's Remote Administration enabled on the tablet, with a
+# password. The password lives in secrets.yaml under kiosk.password.
+kiosk:
+  enabled: false
+  host: ""                  # the tablet's address, e.g. 192.168.8.171
+  port: 2323                # Fully Kiosk's remote admin port
+  wake_seconds: 120         # how long the screen stays on after a trigger
+  min_interval_s: 20        # do not re-issue screenOn for every frame
+
 # A push notification to a phone, with the still attached. The alert policy
 # above decides *whether*; this only carries the verdict, so there is one set
 # of rules about when to disturb somebody and not two.
