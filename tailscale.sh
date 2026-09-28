@@ -18,10 +18,12 @@
 #
 #   sudo bash tailscale.sh install     # packages only; joins nothing
 #   sudo bash tailscale.sh up          # join the tailnet (prints a login URL)
+#   sudo bash tailscale.sh tag         # re-assert tag:panel (see below)
 #        bash tailscale.sh status      # no root needed
 #   sudo bash tailscale.sh funnel on   # public HTTPS URL for the panel
 #   sudo bash tailscale.sh funnel off
-#   sudo bash tailscale.sh down        # leave the tailnet, keep the packages
+#   sudo bash tailscale.sh down        # disconnect, stay logged in
+#   sudo bash tailscale.sh logout      # forget this tailnet, to join another
 #
 # This does NOT replace the OpenVPN client. That is the development path and
 # the way back in if this goes wrong; leave it alone until Tailscale has been
@@ -116,6 +118,37 @@ case "${1:-status}" in
     say "OpenVPN is untouched: $(ip -4 -o addr show tun0 2>/dev/null | grep -oE 'inet [0-9.]+' | cut -d' ' -f2 || echo 'not up')"
     ;;
 
+  tag)
+    # Tagging from the admin console does not always reach a device that was
+    # authenticated as a user -- it keeps reporting AdvertiseTags: none and
+    # the tag never applies. Re-running `up` with the tag settles it.
+    #
+    # Worth doing for a second reason: an untagged device's key expires after
+    # about six months, so an unattended board silently leaves the tailnet one
+    # day next spring with nothing in the logs to say why. Tagged devices do
+    # not expire.
+    #
+    # This exists rather than a line in the docs because the raw command is
+    # easy to get wrong: leave off --accept-dns=false and Tailscale takes over
+    # resolv.conf, the board stops resolving `panel`, and the wall tablet's
+    # bookmark dies with it.
+    need_root
+    have tailscale || die "not installed"
+    TAG="${2:-tag:panel}"
+    say "re-asserting ${TAG}; a login URL may be printed to approve it"
+    say "OpenVPN is untouched, so shell access survives whatever happens here"
+    tailscale up --accept-dns=false --accept-routes=false \
+                 --hostname="${HOSTNAME_WANTED}" \
+                 --advertise-tags="${TAG}" || die "tailscale up failed"
+    sleep 3
+    say "now reporting:"
+    tailscale status --json 2>/dev/null | "$PYTHON_BIN" -c \
+      'import json,sys; m=json.load(sys.stdin).get("Self",{});
+print("    tags       :", m.get("Tags") or "(none)");
+print("    key expiry :", m.get("KeyExpiry") or "(none -- does not expire)")' \
+      2>/dev/null || true
+    ;;
+
   funnel)
     need_root
     have tailscale || die "not installed"
@@ -175,10 +208,27 @@ case "${1:-status}" in
     say "openvpn:  $(ip -4 -o addr show tun0 2>/dev/null | grep -oE 'inet [0-9.]+' | cut -d' ' -f2 || echo 'not up')"
     ;;
 
+  logout)
+    # Signing in with a work identity puts the tailnet on a business trial
+    # rather than the free Personal plan, and a tailnet Tailscale considers
+    # commercial may not be allowed to downgrade. Re-joining under a personal
+    # identity is the way out, and that means forgetting this one first.
+    #
+    # Safe to run from an OpenVPN session: this only touches Tailscale.
+    need_root
+    have tailscale || die "not installed"
+    say "forgetting the current tailnet. The ACL, the tag and the machine"
+    say "entry belong to that tailnet and do NOT come with you -- they have"
+    say "to be set up again in the new one."
+    tailscale logout || die "tailscale logout failed"
+    say "logged out. Next:  sudo bash $0 up   (sign in with the new account)"
+    say "then:              sudo bash $0 tag"
+    ;;
+
   down)
     need_root
     tailscale down && say "left the tailnet; packages and OpenVPN untouched"
     ;;
 
-  *) die "unknown command: $1 (install|up|funnel|status|down)" ;;
+  *) die "unknown command: $1 (install|up|tag|funnel|status|down|logout)" ;;
 esac
