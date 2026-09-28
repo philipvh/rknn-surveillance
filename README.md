@@ -105,6 +105,31 @@ Then set `notify.enabled: true` and `alerts.shadow_only: false`. Run
 `./review.py` against a fortnight of shadow log first: it will tell you how
 many notifications a night you are signing up for, before your phone does.
 
+### Reaching the panel from outside
+
+A phone on the site's own wifi needs nothing. From elsewhere there are three
+shapes, and the board does not care which you pick:
+
+* **A VPN you already run.** The panel is just a web page on the board.
+* **Tailscale** — `sudo bash tailscale.sh install` then `up`. No ports, no
+  DNS, no certificates, and a tailnet address is neither trusted nor
+  directly attached, so a phone gets the password prompt and the metered
+  picture without any configuration.
+* **A public URL** — `tailscale.sh funnel on`, or a tunnel/reverse proxy of
+  your own.
+
+The last one needs `web.trusted_proxies` set first, and this is not optional.
+Everything in front of the panel proxies from `127.0.0.1`, and three separate
+decisions are taken from the client's address: whether a password is needed,
+whether the picture costs money, and whose session is whose. Without it every
+visitor is read as the proxy — one shared session, so the limit guards the
+tunnel rather than the people, and full-quality video with no cap. `tailscale.sh`
+refuses to turn Funnel on until it is set; a proxy of your own will not.
+
+And resist the obvious shortcut when the password prompt gets annoying:
+**do not add the proxy's address to the trusted networks.** That is the one
+edit that turns a public URL into an open one.
+
 ## What it does
 
 **Recording.** Two states. `ready` keeps one minute as pre-roll and throws the
@@ -213,7 +238,7 @@ own video is not billed as mobile data.
 | `forwarder.py` `forwarder.sh` | device web pages published on board ports |
 | `datausage.py` `wan_meter.sh` | the mobile bundle, counting only what leaves the site |
 | `doctor.py` | one command that says whether this install is healthy |
-| `setup_network.sh` `wan_ports.sh` | the camera segment and the tunnel (`camera_ui.sh` is superseded by the forwarder) |
+| `setup_network.sh` `wan_ports.sh` `tailscale.sh` | the camera segment, and reaching the board from outside (`camera_ui.sh` is superseded by the forwarder) |
 
 ## Cameras
 
