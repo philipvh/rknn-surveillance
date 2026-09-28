@@ -88,6 +88,23 @@ sudo bash wan_meter.sh install   # count only the traffic that leaves the site
 Neither is needed to record. Skip the meter if the uplink is not metered, and
 skip the forwarder if nothing sits on a segment you cannot already reach.
 
+To get notifications on a phone, subscribe the [ntfy](https://ntfy.sh) app to
+a topic of your own and put it in `secrets.yaml`:
+
+```bash
+openssl rand -hex 16          # the topic is a password, not a name
+```
+
+```yaml
+# secrets.yaml
+notify:
+  topic: "<that random string>"
+```
+
+Then set `notify.enabled: true` and `alerts.shadow_only: false`. Run
+`./review.py` against a fortnight of shadow log first: it will tell you how
+many notifications a night you are signing up for, before your phone does.
+
 ## What it does
 
 **Recording.** Two states. `ready` keeps one minute as pre-roll and throws the
@@ -109,11 +126,43 @@ about*.
 like a tree, and a resizable divider. Stills and video share one selected
 moment, so switching tabs keeps your place.
 
-**Alerting.** An alert policy with a persistence gate and a schedule, a shadow
-log that records what *would* have been sent, and an optional LoRa uplink with
-ChaCha20-Poly1305 and a replay guard. The shadow log exists because the
-previous system at this club was abandoned after it flooded everyone with
-false alarms — see [the write-up](#the-write-up).
+**Alerting.** Five gates in order, cheapest and most decisive first: the armed
+schedule, PIR corroboration, persistence (duration, sightings, confidence),
+the class gate, and a rate limit. Every decision is written to a shadow log
+with the reason it passed or failed — including the rejects, which is what
+makes "it is quiet" distinguishable from "it is broken and quiet".
+
+The class gate exists because cats and birds cross a tennis court at three in
+the morning. Recording still triggers on the wider set — that footage is worth
+keeping — while only `person` and vehicles are worth a phone buzzing. It
+passes when *any* label qualifies, so a cat in frame cannot suppress the
+person beside it.
+
+**Notifying.** A push notification to a phone via [ntfy](https://ntfy.sh),
+with the incident's still attached, downscaled first because this runs on a
+mobile bundle — a 277 kB still goes out as 26 kB. The policy above decides
+*whether*; `notify.py` only carries the verdict, so a second way out of the
+building does not mean a second set of rules about when to use it. Nothing is
+built at all while `alerts.shadow_only` is true. There is an optional LoRa
+uplink too, with ChaCha20-Poly1305 and a replay guard, for a site with no
+mobile signal.
+
+On a public ntfy server the topic *is* the password — anyone who knows it can
+read every alert and see the stills — so it lives in `secrets.yaml`, wants to
+be long and random, and is never echoed in status output.
+
+**Predicting the volume before switching it on.** The shadow log stores the
+raw facts each decision was made from, not just the verdict, so `review.py`
+can replay a fortnight against thresholds nobody has tried yet. That turned
+"will this flood my phone?" into a number: 12 alerts over 37 days, 0.32 a
+night, worst night 5. It also caught two things worth catching — that
+`require_pir` was rejecting 636 of 710 incidents at a site with no PIR wired,
+so nothing could ever have been sent; and that arming at 21:00 at weekends was
+alerting on the club's own members, who play until 23:00.
+
+The shadow log exists because the previous system at this club was abandoned
+after it flooded everyone with false alarms — see
+[the write-up](#the-write-up).
 
 **Access.** Watching and changing are separate questions. Trusted networks
 decide who can *watch* without a password; two independent switches decide
@@ -156,6 +205,8 @@ own video is not billed as mobile data.
 | `webapp.py` `templates/` | the panel and the media browser |
 | `ptz.py` `tracker.py` | camera control: deadlines, motor budget, watchdog |
 | `camera/` | one file per camera make -- the only place a vendor protocol lives |
+| `alerts.py` `review.py` | the gates, the shadow log, and replaying it |
+| `notify.py` | the push notification, and the still that goes with it |
 | `link.py` `uplink.py` `transports.py` `receiver.py` | the radio link |
 | `settings.py` `settings_cli.py` | panel-editable settings, and the shell rescue |
 | `netinfo.py` | which networks this board is on, read from the routing table |
