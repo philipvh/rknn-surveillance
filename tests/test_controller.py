@@ -931,3 +931,89 @@ class TestPanelScanRequest(Base):
         self.advance(self.c.quiet_period_s + 30.0)
         self.assertIsNone(self.c._incident,
                           "an incident opened by the panel never closed")
+
+
+class FakeWall:
+    """Stands in for the wall panel's screen."""
+
+    def __init__(self):
+        self.wakes = []
+
+    def wake(self, why=""):
+        self.wakes.append(why)
+        return True
+
+    def tick(self):
+        return False
+
+
+class TestEveryPathIntoASweepWakesTheWall(unittest.TestCase):
+    """The wall panel lighting up is rung zero of the deterrence ladder.
+
+    It was wired at one of the two places that enter SWEEPING, so a sweep the
+    detector started woke the screen and a sweep requested from the panel did
+    not -- twenty-nine sweeps over two days with the screen staying dark. The
+    wake now hangs off the state transition itself, so a path added later
+    cannot miss it, which is the only version of this that stays true.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.now = 1000.0
+        self.wall_clock = ARMED_NIGHT
+        self.cfg = Cfg(ptz={"scan_presets": [], "home_preset": "Home",
+                            "dwell_s": 4.0, "settle_s": 0.5})
+        self.ptz = FakePTZ()
+        self.sched = Schedule.from_config({"armed": [
+            {"days": "all", "from": "22:00", "to": "08:00"}]})
+        self.policy = AlertPolicy(self.cfg, self.sched,
+                                  clock=lambda: self.wall_clock)
+        self.shadow = ShadowLog(Path(self.tmp.name) / "shadow")
+        self.settings = FakeSweepSettings()
+        self.screen = FakeWall()
+        self.c = Controller(
+            self.cfg, self.ptz, self.sched, self.policy, self.shadow,
+            clip_fn=lambda s, e: "c.mp4", snapshot_fn=lambda: "snap.jpg",
+            settings=self.settings, kiosk=self.screen,
+            clock=lambda: self.now, wall=lambda: self.wall_clock)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def advance(self, seconds, step=0.1):
+        end = self.now + seconds
+        while self.now < end:
+            self.now = round(self.now + step, 4)
+            self.wall_clock = self.wall_clock + dt.timedelta(seconds=step)
+            self.c.tick()
+
+    def test_a_sweep_from_a_detection_wakes_it(self):
+        self.c.on_detection(Detection(self.wall_clock, 1, 0.9, ["person"]))
+        self.assertIs(self.c.state, State.SWEEPING)
+        self.assertTrue(self.screen.wakes, "a detected trigger left it dark")
+
+    def test_a_sweep_requested_from_the_panel_wakes_it(self):
+        """The case that was broken. request_scan goes through SETTLING, and
+        _tick_settling starts the sweep by a different route entirely."""
+        self.c.request_scan()
+        self.advance(5)
+        self.assertIs(self.c.state, State.SWEEPING)
+        self.assertTrue(self.screen.wakes,
+                        "a panel-requested sweep left the wall dark")
+
+    def test_parking_does_not_wake_it(self):
+        """Only the states that mean somebody is being looked at."""
+        self.c._go(State.PARKED, "home")
+        self.assertEqual(self.screen.wakes, [])
+
+    def test_a_wall_that_throws_does_not_stop_the_camera(self):
+        class Broken:
+            def wake(self, why=""):
+                raise RuntimeError("tablet is a brick")
+
+            def tick(self):
+                return False
+        self.c.kiosk = Broken()
+        self.c.on_detection(Detection(self.wall_clock, 1, 0.9, ["person"]))
+        self.assertIs(self.c.state, State.SWEEPING,
+                      "a dead tablet stopped the camera sweeping")

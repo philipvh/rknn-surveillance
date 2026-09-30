@@ -177,6 +177,14 @@ class Controller:
             self.transitions.append((self._wall(), old.value, new.value, why))
             del self.transitions[:-200]
         log.info("%s -> %s%s", old.value, new.value, f"  ({why})" if why else "")
+        # Here rather than at the call sites. There are several paths into
+        # SWEEPING -- a trigger while parked, and _tick_settling when a scan
+        # was requested -- and instrumenting them one at a time left the
+        # panel-requested sweep silently not waking the wall for two days.
+        # Outside the lock on purpose: never call into another object holding
+        # it, which is what once let a wedged announcer stop detection.
+        if new in (State.SWEEPING, State.HOLDING):
+            self._wake_wall(why or new.value)
 
     # ------------------------------------------------------- detection gating
     def detection_enabled(self):
@@ -296,10 +304,10 @@ class Controller:
             if self._state in (State.PARKED, State.SETTLING, State.SCANNING):
                 self._sweep_index = 0
                 self._deadline = None
-                self._go(State.SWEEPING, "sweep on trigger")
                 # Rung zero of the deterrence ladder: the wall lights up
-                # before the camera has finished turning.
-                self._wake_wall("sweep on trigger")
+                # before the camera has finished turning. _go() does it, for
+                # every path into SWEEPING rather than only this one.
+                self._go(State.SWEEPING, "sweep on trigger")
                 if self.announcer is not None:
                     try:
                         self.announcer.maybe_announce(self._incident)
@@ -307,7 +315,6 @@ class Controller:
                         log.exception("announcement failed")
         elif self._state in (State.SCANNING, State.SETTLING, State.PARKED):
             self._go(State.HOLDING, "person in view")
-            self._wake_wall("person in view")
             # Rung three of the deterrence ladder, once per incident: the
             # camera has already turned to face them by getting here.
             if self.announcer is not None:

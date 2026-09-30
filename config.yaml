@@ -327,8 +327,21 @@ kiosk:
   enabled: false
   host: ""                  # the tablet's address, e.g. 192.168.8.171
   port: 2323                # Fully Kiosk's remote admin port
-  wake_seconds: 120         # how long the screen stays on after a trigger
-  min_interval_s: 20        # do not re-issue screenOn for every frame
+  wake_seconds: 120         # how long it stays bright after a trigger
+  min_interval_s: 20        # do not re-issue the command for every frame
+
+  # dim: idle at dim_level, full brightness on a trigger. Better than off --
+  # a blanked Android screen suspends the page's timers, so the panel stops
+  # polling and looks dead from the board's side, and a dim panel is still a
+  # panel somebody can read.
+  # off: idle with the screen blanked, for a site that wants it truly dark.
+  idle_mode: dim
+  dim_level: 6              # 0-255. 0 is the dimmest the panel goes, not off
+  bright_level: 255
+
+  # NB: Fully's own screen-off timer must be 0 for dim mode, or it blanks the
+  # screen underneath all this. On the tablet: Settings -> Device Management
+  # -> Timeout to Screen Off = 0. It reads as timeToScreenOffV2 over the API.
 
 # A push notification to a phone, with the still attached. The alert policy
 # above decides *whether*; this only carries the verdict, so there is one set

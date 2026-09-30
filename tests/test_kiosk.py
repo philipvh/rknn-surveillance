@@ -80,13 +80,22 @@ class TestItOnlyActsWhenConfigured(Base):
 
 
 class TestWaking(Base):
-    def test_it_asks_the_tablet_to_turn_the_screen_on(self):
+    def test_it_turns_the_screen_on_and_up(self):
+        """Brightness means nothing to a blanked panel, so screenOn has to
+        come first -- something other than us may have turned it off."""
         k = self.build()
         self.assertTrue(k.wake("sweep on trigger"))
         self.settle(k)
-        self.assertEqual(len(self.http.urls), 1)
-        self.assertIn("cmd=screenOn", self.http.urls[0])
+        joined = " ".join(self.http.urls)
+        self.assertIn("cmd=screenOn", joined)
+        self.assertIn("screenBrightness", joined)
+        self.assertIn("value=255", joined)
         self.assertIn("10.0.0.5:2323", self.http.urls[0])
+        self.assertLess(self.http.urls.index([u for u in self.http.urls
+                                              if "screenOn" in u][0]),
+                        self.http.urls.index([u for u in self.http.urls
+                                              if "screenBrightness" in u][0]),
+                        "brightness was set before the screen was on")
 
     def test_the_password_is_not_in_the_status(self):
         k = self.build()
@@ -100,7 +109,7 @@ class TestWaking(Base):
         for _ in range(50):
             k.wake("again")
         self.settle(k)
-        self.assertEqual(len(self.http.urls), 1)
+        self.assertEqual(len([u for u in self.http.urls if "screenOn" in u]), 1)
 
     def test_a_later_trigger_wakes_it_again(self):
         k = self.build()
@@ -138,7 +147,11 @@ class TestSleeping(Base):
         self.now[0] += 121
         self.assertTrue(k.tick())
         self.settle(k)
-        self.assertIn("cmd=screenOff", self.http.urls[-1])
+        joined = " ".join(self.http.urls)
+        self.assertIn("value=6", joined, "it did not dim")
+        self.assertNotIn("cmd=screenOff", joined,
+                         "dim mode blanked the screen, which stops the "
+                         "page polling and makes the panel look dead")
 
     def test_tick_is_idle_when_nothing_woke_it(self):
         k = self.build()
@@ -179,7 +192,9 @@ class TestItNeverCostsTheIncident(Base):
         k = self.build(Boom())
         k.wake("trigger")
         self.settle(k)
-        self.assertEqual(k.failed, 1)
+        # A wake is now two commands (screenOn, then brightness), so both
+        # fail. The point is that neither reached the caller.
+        self.assertGreaterEqual(k.failed, 1)
 
     def test_the_call_does_not_block_the_caller(self):
         """A tablet that accepts the connection and never answers must not
@@ -207,3 +222,40 @@ class TestItNeverCostsTheIncident(Base):
         self.assertLess(took, 0.5,
                         "wake() blocked the caller for %.1fs" % took)
         self.assertTrue(started.wait(2))
+
+
+class TestDimRatherThanBlank(Base):
+    """A blanked Android screen suspends the page's timers, so the panel stops
+    polling and looks dead from the board's side. Dim keeps it alive and
+    readable; off is kept for a site that wants it genuinely dark."""
+
+    def urls(self):
+        return " ".join(self.http.urls)
+
+    def test_dim_is_the_default(self):
+        self.assertEqual(self.build().idle_mode, "dim")
+
+    def test_idle_sets_the_low_brightness_and_leaves_the_screen_on(self):
+        k = self.build(dim_level=3)
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertIn("value=3", self.urls())
+        self.assertNotIn("cmd=screenOff", self.urls())
+
+    def test_off_mode_still_blanks_it(self):
+        k = self.build(idle_mode="off")
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertIn("cmd=screenOff", self.urls())
+
+    def test_a_nonsense_mode_falls_back_to_dim(self):
+        """Not to off: the failure that is easy to miss is a dark panel."""
+        self.assertEqual(self.build(idle_mode="sideways").idle_mode, "dim")
+
+    def test_levels_are_clamped_to_what_fully_accepts(self):
+        k = self.build(dim_level=-5, bright_level=9999)
+        self.assertEqual((k.dim_level, k.bright_level), (0, 255))
