@@ -163,6 +163,14 @@ keeping — while only `person` and vehicles are worth a phone buzzing. It
 passes when *any* label qualifies, so a cat in frame cannot suppress the
 person beside it.
 
+**Deterring.** Three rungs, in order of how much they cost to be wrong about:
+the wall panel's screen goes to full brightness, the camera turns to face what
+it saw, and the speaker says something. The screen idles dim rather than
+blanked — a blanked Android screen suspends the page's timers, so the panel
+stops polling and looks dead from the board's side, and a dim panel is still
+one somebody can read. All three hang off the same state transition, so a path
+added later cannot miss them.
+
 **Notifying.** A push notification to a phone via [ntfy](https://ntfy.sh),
 with the incident's still attached, downscaled first because this runs on a
 mobile bundle — a 277 kB still goes out as 26 kB. The policy above decides
@@ -232,6 +240,7 @@ own video is not billed as mobile data.
 | `camera/` | one file per camera make -- the only place a vendor protocol lives |
 | `alerts.py` `review.py` | the gates, the shadow log, and replaying it |
 | `notify.py` | the push notification, and the still that goes with it |
+| `kiosk.py` | the wall panel's screen, as a deterrent rather than a display |
 | `link.py` `uplink.py` `transports.py` `receiver.py` | the radio link |
 | `settings.py` `settings_cli.py` | panel-editable settings, and the shell rescue |
 | `netinfo.py` | which networks this board is on, read from the routing table |

@@ -219,7 +219,51 @@ put -- but if a dialog appears, tell it to stay connected, and turn off
 "switch to mobile data automatically" if the setting exists. Fully Kiosk
 itself does not care whether the network reaches the internet.
 
-## Two things that kill wall-mounted tablets
+## The screen as a deterrent
+
+The panel idles dim and goes to full brightness the moment the camera starts
+sweeping, then falls back after `kiosk.wake_seconds` (120). Rung zero of the
+deterrence ladder: the wall says *you are on camera* before the camera has
+finished turning, and a panel that brightens as somebody approaches reads as a
+response rather than as scenery.
+
+Dim rather than blank, for two reasons. A blanked Android screen suspends the
+page's timers, so the panel stops polling and looks dead from the board's side
+— "is the kiosk alive?" stops being answerable from the access log. And a dim
+panel is still a panel somebody can read. `kiosk.idle_mode: off` keeps the
+blanking behaviour for a site that wants it genuinely dark.
+
+Four things have to be true on the tablet:
+
+* **Fully PLUS**, €7.90 one-off per device from
+  [license.fully-kiosk.com](https://license.fully-kiosk.com/license/single).
+  The REST API works unlicensed for evaluation, which is enough to be fooled
+  into thinking it is set up; the licence is what stops the watermark and the
+  nag on a wall.
+* **Remote Administration** enabled with a password: Settings → Other Settings
+  → Remote Administration. That password goes in `secrets.yaml` under
+  `kiosk.password` and never appears in status output.
+* **Timeout to Screen Off = 0** (`timeToScreenOffV2`), or Fully blanks the
+  screen underneath all this and the dimming has nothing to act on.
+* **Modify system settings** granted to Fully. Without it Fully changes the
+  brightness of its own window — which works, and is invisible to the API:
+  `deviceInfo.screenBrightness` reports the *system* value and sits
+  unchanged whatever you set. Granting it makes the effect verifiable
+  remotely instead of needing somebody to look at the wall.
+
+The site's own values belong in **`config.local.yaml`**, not `config.yaml`:
+
+```yaml
+kiosk:
+  enabled: true
+  host: "192.168.8.171"
+```
+
+`config.yaml` is deployed over from the repo, so anything site-specific put
+there is one `deploy.sh` away from being silently reset to the defaults. That
+is not hypothetical; it happened here.
+
+## Four things that kill wall-mounted tablets
 
 **A tablet that browses.** Clear it before mounting: sign out of the Google
 account, remove mail and photos, and take everything off the home screen. A
@@ -233,8 +277,45 @@ charger on a timer plug or a smart plug and cycle it — a couple of hours a day
 is ample for a device that never leaves the wall. Look at it occasionally.
 
 **Burn-in.** The Tab S screens are AMOLED and a static interface displayed
-continuously will ghost into them. The panel is dark for that reason; low
-brightness helps more; the screensaver is the real fix.
+continuously will ghost into them. The panel idles dim for that reason too;
+the screensaver is the real fix.
+
+**A charger that cannot keep up.** The one that actually bit. The tablet ran
+28 hours, died, charged for 46 with the screen off, ran 41 hours and died
+again — a pattern with no relation to club hours, restarts or anything in the
+software, which is what gives it away as a power deficit rather than a crash.
+
+Fully's `deviceInfo` turns that into numbers, and the numbers were damning:
+plugged in, screen off, charging at **472 mA** measured over thirty minutes
+(3% of a 7900 mAh cell). Against 600–900 mA for an active screen plus wifi
+plus a video stream, that loses a day and a half at a time.
+
+The cause was not the supply's capacity — a 10 A brick made no difference —
+but what the tablet believed it was plugged into. Android decides how much to
+draw by inspecting the USB data lines:
+
+| | |
+|---|---|
+| D+ and D− shorted together (≤200 Ω) | dedicated charger, draw up to 2 A |
+| D+/D− open | might be a computer, clamp to 500 mA |
+
+Open data lines give you 472 mA no matter how large the supply. **Short D+ to
+D−, and leave both floating with respect to ground** — grounding them is not a
+charging signal, it reads as a fault. A charge-only cable already has the
+bridge built in, which is the no-soldering version of the same fix.
+
+Samsung tablets of this era want more than the generic short for their full
+2.1 A: *Samsung divider mode*, ≈1.2 V on each data line independently, from a
+33 kΩ/10 kΩ divider off VBUS. Worth trying only if the plain short leaves you
+short of what you need; measure rather than assume.
+
+After the bridge the tablet held 100% **with the screen on for thirteen hours**
+and passed 48 hours of uptime, against 28 and 41 before. A marginal supply
+cannot do that.
+
+One tension worth naming: this is now a tablet held at 100% permanently, which
+is exactly what the swelling note above warns against. The timer plug matters
+more now, not less.
 
 ## Security
 
