@@ -189,6 +189,12 @@ class Kiosk:
             # Unreachable is a reading, not an error: it is what distinguishes
             # a flat tablet from one that dropped the wifi.
             row["why"] = type(e).__name__
+        # What the board COMMANDED, not what Fully reports. In dim mode the
+        # screen stays on and only its brightness changes, so screenOn cannot
+        # tell bright from dim -- bucketing on it produced two hours of
+        # readings labelled "bright" that were simply all of them, and a dim
+        # bucket that could never populate.
+        row["bright"] = bool(self._awake_until > self._clock())
         self.last_reading = dict(row, t=dt.datetime.now().isoformat(
             timespec="seconds"))
         if self.log is not None:
@@ -317,7 +323,14 @@ def rates(rows, capacity_mah=7900):
             t = dt.datetime.fromisoformat(r["t"])
         except (KeyError, ValueError):
             continue
-        cur = (t, r["battery"], bool(r.get("screen")))
+        # "bright" is what the board commanded. Older rows only have
+        # "screen", which in dim mode is always True; fall back to it so a
+        # log written before this existed still parses, and accept that those
+        # rows cannot separate the two regimes.
+        lit = r.get("bright")
+        if lit is None:
+            lit = bool(r.get("screen"))
+        cur = (t, r["battery"], bool(lit))
         if prev is not None:
             hours = (cur[0] - prev[0]).total_seconds() / 3600.0
             # Attribute the interval to the state it STARTED in; a change

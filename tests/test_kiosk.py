@@ -388,3 +388,64 @@ class TestRates(unittest.TestCase):
         r = kiosk.rates([])
         self.assertIsNone(r["bright"]["ma"])
         self.assertIsNone(r["dim"]["ma"])
+
+
+class TestBrightIsWhatTheBoardCommanded(Base):
+    """In dim mode the screen stays ON and only brightness changes, so Fully's
+    screenOn cannot tell the two regimes apart. Bucketing on it gave two hours
+    of readings all labelled 'bright' -- which were simply all of them -- and
+    a dim bucket that could never populate."""
+
+    def good(self):
+        body = json.dumps({"batteryLevel": 80, "isPlugged": True,
+                           "screenOn": True, "batteryTemperature": 21})
+
+        class OK:
+            done = threading.Event()
+
+            def __call__(self, url, timeout=None):
+                OK.done.set()
+
+                class R:
+                    def read(self_inner):
+                        return body.encode()
+
+                    def __enter__(self_inner):
+                        return self_inner
+
+                    def __exit__(self_inner, *a):
+                        return False
+                return R()
+        return OK()
+
+    def test_inside_the_wake_window_is_bright(self):
+        k = self.build(self.good())
+        k.wake("trigger")
+        self.assertTrue(k.poll()["bright"])
+
+    def test_after_the_window_is_not_bright_though_the_screen_is_still_on(self):
+        k = self.build(self.good())
+        k.wake("trigger")
+        self.now[0] += 121
+        row = k.poll()
+        self.assertTrue(row["screen"], "dim mode leaves the screen on")
+        self.assertFalse(row["bright"], "dim was recorded as bright")
+
+    def test_never_woken_is_not_bright(self):
+        self.assertFalse(self.build(self.good()).poll()["bright"])
+
+    def test_rates_prefers_bright_over_screen(self):
+        t = dt.datetime(2026, 10, 9, 20, 0)
+        rows = [{"t": (t + dt.timedelta(minutes=m)).isoformat(), "ok": True,
+                 "battery": b, "screen": True, "bright": lit}
+                for m, b, lit in ((0, 80, True), (30, 78, True),
+                                  (60, 78, False), (90, 80, False))]
+        r = kiosk.rates(rows)
+        self.assertLess(r["bright"]["ma"], 0)
+        self.assertGreater(r["dim"]["ma"], 0)
+
+    def test_a_row_written_before_this_existed_still_parses(self):
+        t = dt.datetime(2026, 10, 9, 20, 0)
+        rows = [{"t": (t + dt.timedelta(minutes=m)).isoformat(), "ok": True,
+                 "battery": b, "screen": True} for m, b in ((0, 80), (30, 81))]
+        self.assertIsNotNone(kiosk.rates(rows)["bright"]["ma"])
