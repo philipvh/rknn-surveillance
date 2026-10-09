@@ -442,6 +442,22 @@ def main(argv=None):
                  f", bundle {usage.limit_gb:g} GB" if usage.limit_gb else "",
                  counting)
 
+    def kiosk_loop():
+        """A battery reading every few minutes.
+
+        The one subsystem whose failure is a slow drift over days was the only
+        one nothing recorded, so every answer about it came from querying by
+        hand after the fact. An unreachable tablet is logged too -- that row
+        is what tells a flat battery apart from a dropped wifi.
+        """
+        every = max(60, int(cfg._get("kiosk", "sample_seconds", default=300)))
+        while True:
+            try:
+                wall.poll()
+            except Exception:
+                log.exception("could not sample the wall panel")
+            time.sleep(every)
+
     def usage_loop():
         while True:
             try:
@@ -451,7 +467,9 @@ def main(argv=None):
             time.sleep(60)
 
     threading.Thread(target=usage_loop, daemon=True, name="usage").start()
-
+    if wall.configured:
+        threading.Thread(target=kiosk_loop, daemon=True,
+                         name="kiosk-sampler").start()
     # The wall panel runs in this process on purpose: it then drives the same
     # PTZ object as the controller, so every button goes through the same
     # deadline watchdog and the same motor budget. A separate service would

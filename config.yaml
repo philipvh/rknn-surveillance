@@ -339,6 +339,15 @@ kiosk:
   dim_level: 6              # 0-255. 0 is the dimmest the panel goes, not off
   bright_level: 255
 
+  # A reading every few minutes, kept per day under state/kiosk. The one
+  # subsystem whose failure is a slow drift over days was the only one nothing
+  # recorded, so every answer about it came from querying by hand after the
+  # fact. An unreachable tablet is logged too: that row is what tells a flat
+  # battery apart from a dropped wifi.
+  sample_seconds: 300
+  battery_mah: 7900         # for turning percent-per-hour into milliamps
+  state: state/kiosk
+
   # NB: Fully's own screen-off timer must be 0 for dim mode, or it blanks the
   # screen underneath all this. On the tablet: Settings -> Device Management
   # -> Timeout to Screen Off = 0. It reads as timeToScreenOffV2 over the API.

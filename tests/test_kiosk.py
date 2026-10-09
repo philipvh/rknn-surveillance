@@ -7,6 +7,9 @@ while the camera is turning. That also stops the tablet outlasting its charger
 -- it managed 28 hours and then 41 before dying, both times with the screen on.
 """
 
+import datetime as dt
+import json
+import tempfile
 import sys
 import threading
 import unittest
@@ -259,3 +262,129 @@ class TestDimRatherThanBlank(Base):
     def test_levels_are_clamped_to_what_fully_accepts(self):
         k = self.build(dim_level=-5, bright_level=9999)
         self.assertEqual((k.dim_level, k.bright_level), (0, 255))
+
+
+class TestPolling(Base):
+    def test_a_good_reading_is_recorded(self):
+        payload = json.dumps({"batteryLevel": 79, "isPlugged": True,
+                              "screenOn": True, "batteryTemperature": 22})
+
+        class OK:
+            done = threading.Event()
+
+            def __call__(self, url, timeout=None):
+                OK.done.set()
+
+                class R:
+                    def read(self_inner):
+                        return payload.encode()
+
+                    def __enter__(self_inner):
+                        return self_inner
+
+                    def __exit__(self_inner, *a):
+                        return False
+                return R()
+        k = self.build(OK())
+        row = k.poll()
+        self.assertEqual((row["ok"], row["battery"], row["screen"]),
+                         (True, 79, True))
+        self.assertIn("t", row)
+
+    def test_an_unreachable_tablet_is_a_reading_not_an_error(self):
+        """The row that tells a flat battery apart from a dropped wifi, which
+        was exactly the distinction unavailable when it mattered."""
+        k = self.build(FakeHTTP(urllib.error.URLError("no route")))
+        row = k.poll()
+        self.assertFalse(row["ok"])
+        self.assertIn("why", row)
+
+    def test_polling_an_unconfigured_kiosk_does_nothing(self):
+        self.assertIsNone(self.build(host="").poll())
+
+    def test_the_reading_reaches_the_status(self):
+        k = self.build(FakeHTTP(urllib.error.URLError("x")))
+        k.poll()
+        self.assertFalse(k.status()["reading"]["ok"])
+
+
+class TestTheLog(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log = kiosk.KioskLog(Path(self.tmp.name) / "kiosk")
+
+    def test_rows_come_back_in_order(self):
+        for i in range(3):
+            self.log.record({"ok": True, "battery": 50 + i})
+        rows = self.log.read()
+        self.assertEqual([r["battery"] for r in rows], [50, 51, 52])
+
+    def test_it_writes_one_file_per_day(self):
+        d1 = dt.datetime(2026, 10, 9, 21, 0)
+        self.log.record({"ok": True, "battery": 80}, when=d1)
+        self.log.record({"ok": True, "battery": 79},
+                        when=d1 + dt.timedelta(days=1))
+        self.assertEqual(len(list((Path(self.tmp.name) / "kiosk").glob("*.jsonl"))), 2)
+
+    def test_a_write_failure_does_not_raise_at_the_caller(self):
+        """This runs on a sampler thread beside the recording."""
+        bad = kiosk.KioskLog("/proc/nonexistent/kiosk")
+        bad.record({"ok": True, "battery": 1})      # must not raise
+
+
+class TestRates(unittest.TestCase):
+    """Bright and dim attributed separately, which is the whole point: a day
+    mixing a tournament with a quiet night averages to a number describing
+    neither."""
+
+    def rows(self, spec, start=None):
+        t = start or dt.datetime(2026, 10, 9, 20, 0)
+        out = []
+        for minutes, battery, screen in spec:
+            out.append({"t": (t + dt.timedelta(minutes=minutes)).isoformat(),
+                        "ok": True, "battery": battery, "screen": screen})
+        return out
+
+    def test_bright_losing_and_dim_gaining_are_reported_apart(self):
+        rows = self.rows([(0, 80, True), (60, 76, True),      # -4% in an hour
+                          (120, 76, False), (180, 80, False)])  # +4% in an hour
+        r = kiosk.rates(rows, capacity_mah=7900)
+        self.assertLess(r["bright"]["ma"], 0)
+        self.assertGreater(r["dim"]["ma"], 0)
+        self.assertEqual(r["bright"]["percent"], -4)
+        self.assertEqual(r["dim"]["percent"], 4)
+
+    def test_a_gap_is_not_counted_as_an_interval(self):
+        """The tablet was off for two days. The level either side says nothing
+        about a rate.
+
+        Asserting on the resulting mA is useless -- a long gap DILUTES the
+        average rather than inflating it, so the first version of this passed
+        with the guard removed. Assert on the hours actually counted.
+        """
+        rows = self.rows([(0, 80, False), (10, 79, False)])
+        rows.append({"t": dt.datetime(2026, 10, 11, 9, 0).isoformat(),
+                     "ok": True, "battery": 100, "screen": False})
+        r = kiosk.rates(rows)
+        self.assertAlmostEqual(r["dim"]["hours"], 10 / 60.0, places=2,
+                               msg="a two-day gap was counted as an interval")
+
+    def test_an_unreachable_row_breaks_the_chain(self):
+        """The readings either side must not be paired across a dead tablet.
+
+        They have to be CLOSE together, or the one-hour guard rejects the pair
+        anyway and the test passes whether or not the chain is broken -- which
+        is how the first version of this proved nothing.
+        """
+        rows = self.rows([(0, 80, False)])
+        rows.append({"t": dt.datetime(2026, 10, 9, 20, 20).isoformat(),
+                     "ok": False, "why": "URLError"})
+        rows += self.rows([(40, 40, False)])      # 40 min after the first
+        r = kiosk.rates(rows)
+        self.assertIsNone(r["dim"]["ma"], "it rated across a dead tablet")
+
+    def test_no_data_is_none_not_zero(self):
+        r = kiosk.rates([])
+        self.assertIsNone(r["bright"]["ma"])
+        self.assertIsNone(r["dim"]["ma"])

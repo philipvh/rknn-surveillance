@@ -43,7 +43,11 @@ timeout, so every call is fired on its own thread and every exception is
 swallowed with a log line.
 """
 
+import datetime as dt
+import json
 import logging
+import os
+import pathlib
 import threading
 import time
 import urllib.error
@@ -82,6 +86,7 @@ class Kiosk:
         # Do not re-issue screenOn for every frame of an incident.
         self.min_interval_s = float(c.get("min_interval_s", 20))
         self.timeout_s = float(c.get("timeout_s", TIMEOUT_S))
+        self.capacity_mah = int(c.get("battery_mah", 7900))
         self._opener = opener or urllib.request.urlopen
         self._clock = clock
         self._lock = threading.Lock()
@@ -90,6 +95,8 @@ class Kiosk:
         self.woken = 0
         self.failed = 0
         self.last_error = ""
+        self.log = None                 # set by from_config when a path is given
+        self.last_reading = None
 
     @property
     def configured(self):
@@ -102,7 +109,8 @@ class Kiosk:
                     "idle_mode": self.idle_mode,
                     "bright": self._awake_until > self._clock(),
                     "woken": self.woken, "failed": self.failed,
-                    "last_error": self.last_error}
+                    "last_error": self.last_error,
+                    "reading": self.last_reading}
 
     # ----------------------------------------------------------------- wire
     def _url(self, cmd, **extra):
@@ -158,6 +166,35 @@ class Kiosk:
         threading.Thread(target=run, daemon=True,
                          name="kiosk-%s" % ("bright" if bright else "dim")).start()
 
+    # ---------------------------------------------------------------- read
+    def poll(self):
+        """Ask the tablet how it is. Returns a row, reachable or not.
+
+        Synchronous on purpose -- this runs on the sampler's own thread, not
+        the controller's, and a reading that silently never arrives is worse
+        than one that takes four seconds.
+        """
+        if not self.configured:
+            return None
+        row = {"ok": False}
+        try:
+            with self._opener(self._url("deviceInfo", type="json"),
+                              timeout=self.timeout_s) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            row = {"ok": True, "battery": d.get("batteryLevel"),
+                   "plugged": bool(d.get("isPlugged")),
+                   "screen": bool(d.get("screenOn")),
+                   "temp": d.get("batteryTemperature")}
+        except Exception as e:
+            # Unreachable is a reading, not an error: it is what distinguishes
+            # a flat tablet from one that dropped the wifi.
+            row["why"] = type(e).__name__
+        self.last_reading = dict(row, t=dt.datetime.now().isoformat(
+            timespec="seconds"))
+        if self.log is not None:
+            self.log.record(row)
+        return self.last_reading
+
     # ---------------------------------------------------------------- calls
     def wake(self, why=""):
         """Turn the screen on. Cheap to call repeatedly; it rate-limits."""
@@ -191,9 +228,124 @@ class Kiosk:
         return True
 
 
-def from_config(cfg):
+class KioskLog:
+    """A reading every few minutes, kept per day.
+
+    The one subsystem here whose failure is a slow drift over days was the one
+    nothing recorded, so every answer about it came from querying by hand
+    after the fact. Tuesday's outage took three days and a chain of inference
+    to explain; with this it would have been a slope on a page.
+
+    A failed read is written too, as ok=false. That is the row that tells
+    "powered off" apart from "fell off the wifi", which was exactly the
+    distinction unavailable when it mattered.
+    """
+
+    KEEP_DAYS = 120
+
+    def __init__(self, root):
+        self.root = pathlib.Path(root)
+        self._lock = threading.Lock()
+
+    def _path(self, when):
+        return self.root / ("%s.jsonl" % when.strftime("%Y-%m-%d"))
+
+    def record(self, row, when=None):
+        when = when or dt.datetime.now()
+        row = dict(row)
+        row.setdefault("t", when.isoformat(timespec="seconds"))
+        try:
+            with self._lock:
+                self.root.mkdir(parents=True, exist_ok=True)
+                with open(self._path(when), "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(row, sort_keys=True) + "\n")
+            self._prune()
+        except OSError as e:
+            log.warning("could not write the kiosk log: %s", e)
+        return row
+
+    def _prune(self):
+        try:
+            days = sorted(f for f in self.root.glob("*.jsonl"))
+        except OSError:
+            return
+        for f in days[:-self.KEEP_DAYS] if len(days) > self.KEEP_DAYS else []:
+            try:
+                f.unlink()
+            except OSError:
+                pass
+
+    def read(self, since=None):
+        """Rows, oldest first. `since` is a date."""
+        out = []
+        try:
+            files = sorted(self.root.glob("*.jsonl"))
+        except OSError:
+            return out
+        for f in files:
+            if since and f.stem < since.isoformat():
+                continue
+            try:
+                for line in f.read_text(encoding="utf-8").splitlines():
+                    if line.strip():
+                        try:
+                            out.append(json.loads(line))
+                        except ValueError:
+                            pass
+            except OSError:
+                pass
+        return out
+
+
+def rates(rows, capacity_mah=7900):
+    """Net milliamps while the screen was bright, and while it was dim.
+
+    Pairs consecutive readings and attributes each interval to the screen
+    state it was taken under, so a day that mixes a tournament with a quiet
+    night yields both numbers rather than one average that describes neither.
+
+    Gaps longer than an hour are dropped: the tablet was off or unreachable,
+    and the level either side of that says nothing about a rate.
+    """
+    buckets = {True: [0.0, 0.0], False: [0.0, 0.0]}     # [pct, hours]
+    prev = None
+    for r in rows:
+        if not r.get("ok", True) or r.get("battery") is None:
+            prev = None                                  # a gap, not a step
+            continue
+        try:
+            t = dt.datetime.fromisoformat(r["t"])
+        except (KeyError, ValueError):
+            continue
+        cur = (t, r["battery"], bool(r.get("screen")))
+        if prev is not None:
+            hours = (cur[0] - prev[0]).total_seconds() / 3600.0
+            # Attribute the interval to the state it STARTED in; a change
+            # part-way is noise at five-minute sampling.
+            if 0 < hours <= 1.0:
+                b = buckets[prev[2]]
+                b[0] += cur[1] - prev[1]
+                b[1] += hours
+        prev = cur
+    out = {}
+    for state, name in ((True, "bright"), (False, "dim")):
+        pct, hours = buckets[state]
+        out[name] = {
+            "percent": round(pct, 1), "hours": round(hours, 2),
+            "ma": round(pct / 100.0 * capacity_mah / hours) if hours > 0 else None,
+        }
+    return out
+
+
+def from_config(cfg, state_root=None):
     try:
         c = dict(cfg._get("kiosk", default={}) or {})
     except AttributeError:
         c = dict(cfg or {})
-    return Kiosk(c)
+    k = Kiosk(c)
+    root = state_root
+    if root is None and hasattr(cfg, "resolve"):
+        root = cfg.resolve(c.get("state", "state/kiosk"))
+    if root is not None:
+        k.log = KioskLog(root)
+    return k
