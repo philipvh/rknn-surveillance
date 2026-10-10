@@ -223,3 +223,31 @@ class TestSendIncident(unittest.TestCase):
                             opener=http)
         n.send_incident(incident(["person"]))
         self.assertEqual(http.calls[0]["headers"]["Tags"], "rotating_light")
+
+
+class TestTheBodyIsNotAHeader(unittest.TestCase):
+    """ntfy headers are latin-1 and collapse whitespace; the body is UTF-8.
+    Running the body through the header cleaner turned every multi-line
+    message into one long line."""
+
+    def build(self, http):
+        return notify.Notifier({"enabled": True, "topic": "t", "retries": 0},
+                               opener=http)
+
+    def test_newlines_survive(self):
+        http = FakeHTTP()
+        self.build(http).send("Title", "line one\nline two\nline three")
+        self.assertEqual(http.calls[0]["body"].decode(),
+                         "line one\nline two\nline three")
+
+    def test_accents_survive(self):
+        http = FakeHTTP()
+        self.build(http).send("Title", "café — Weebosch")
+        self.assertIn("café", http.calls[0]["body"].decode("utf-8"))
+
+    def test_the_title_is_still_flattened(self):
+        """It is a header, so it must stay ASCII and single-line."""
+        http = FakeHTTP()
+        self.build(http).send("Café\nsecond line", "body")
+        http.calls[0]["headers"]["Title"].encode("ascii")
+        self.assertNotIn("\n", http.calls[0]["headers"]["Title"])

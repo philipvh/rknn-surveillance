@@ -199,7 +199,13 @@ class Notifier:
                 # No picture: the message becomes the body, because ntfy shows
                 # a header-only message but a header-only *attachment* post is
                 # an empty file.
-                body = _ascii_header(message).encode("utf-8")
+                #
+                # NOT run through _ascii_header. That exists because ntfy's
+                # HEADERS are latin-1 on the wire and collapse whitespace; the
+                # body is a UTF-8 payload and keeps its newlines and accents.
+                # Reusing the header cleaner here turned every multi-line
+                # message into one long line.
+                body = str(message).encode("utf-8")
                 headers.pop("Message", None)
             self._post(body, headers, ctype)
         except NotifyError as e:
