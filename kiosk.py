@@ -323,13 +323,16 @@ def rates(rows, capacity_mah=7900):
             t = dt.datetime.fromisoformat(r["t"])
         except (KeyError, ValueError):
             continue
-        # "bright" is what the board commanded. Older rows only have
-        # "screen", which in dim mode is always True; fall back to it so a
-        # log written before this existed still parses, and accept that those
-        # rows cannot separate the two regimes.
+        # "bright" is what the board commanded. A row without it predates the
+        # field and cannot be attributed to either regime -- falling back to
+        # "screen" looked harmless and was not: in dim mode screen is always
+        # true, so every legacy row landed in the bright bucket and gave it a
+        # confident number built from readings taken while the panel was dim.
+        # Unattributable is a gap, like an unreachable tablet.
         lit = r.get("bright")
         if lit is None:
-            lit = bool(r.get("screen"))
+            prev = None
+            continue
         cur = (t, r["battery"], bool(lit))
         if prev is not None:
             hours = (cur[0] - prev[0]).total_seconds() / 3600.0

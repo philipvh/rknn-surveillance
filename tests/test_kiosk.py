@@ -339,11 +339,18 @@ class TestRates(unittest.TestCase):
     neither."""
 
     def rows(self, spec, start=None):
+        """The third field is the regime: True bright, False dim.
+
+        Both `screen` and `bright` are written, because in dim mode the real
+        tablet reports the screen as ON -- a fixture that set screen=False for
+        dim would not resemble anything the board ever logs.
+        """
         t = start or dt.datetime(2026, 10, 9, 20, 0)
         out = []
-        for minutes, battery, screen in spec:
+        for minutes, battery, lit in spec:
             out.append({"t": (t + dt.timedelta(minutes=minutes)).isoformat(),
-                        "ok": True, "battery": battery, "screen": screen})
+                        "ok": True, "battery": battery,
+                        "screen": True, "bright": lit})
         return out
 
     def test_bright_losing_and_dim_gaining_are_reported_apart(self):
@@ -444,8 +451,25 @@ class TestBrightIsWhatTheBoardCommanded(Base):
         self.assertLess(r["bright"]["ma"], 0)
         self.assertGreater(r["dim"]["ma"], 0)
 
-    def test_a_row_written_before_this_existed_still_parses(self):
+    def test_a_row_written_before_this_existed_is_not_attributed(self):
+        """Falling back to `screen` looked harmless and was not. In dim mode
+        screen is always true, so every legacy row landed in the bright
+        bucket: a real log reported "+43 mA bright" built entirely from
+        readings taken while the panel was dim."""
         t = dt.datetime(2026, 10, 9, 20, 0)
         rows = [{"t": (t + dt.timedelta(minutes=m)).isoformat(), "ok": True,
                  "battery": b, "screen": True} for m, b in ((0, 80), (30, 81))]
-        self.assertIsNotNone(kiosk.rates(rows)["bright"]["ma"])
+        r = kiosk.rates(rows)
+        self.assertIsNone(r["bright"]["ma"], "a legacy row was called bright")
+        self.assertIsNone(r["dim"]["ma"])
+
+    def test_legacy_rows_do_not_bridge_two_real_ones(self):
+        t = dt.datetime(2026, 10, 9, 20, 0)
+        rows = [{"t": t.isoformat(), "ok": True, "battery": 80,
+                 "screen": True, "bright": False},
+                {"t": (t + dt.timedelta(minutes=20)).isoformat(), "ok": True,
+                 "battery": 70, "screen": True},                  # legacy
+                {"t": (t + dt.timedelta(minutes=40)).isoformat(), "ok": True,
+                 "battery": 60, "screen": True, "bright": False}]
+        self.assertIsNone(kiosk.rates(rows)["dim"]["ma"],
+                          "it rated across an unattributable row")
