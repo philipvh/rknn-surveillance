@@ -25,6 +25,20 @@ the deterrence ladder: the wall says "you are on camera" before the camera has
 finished turning, and a panel that brightens as you approach reads as a
 response rather than as scenery.
 
+There is a ceiling on how long it stays bright. A trigger extends the wake
+window, and on a busy afternoon -- a tournament, a club evening -- triggers
+arrive faster than the window expires, so the panel would simply stay at full
+brightness for hours and lose the charge race it was dimmed to win. After
+max_bright_seconds of a continuous bright spell it drops to dim and refuses to
+brighten again for cooldown_seconds. The spell only resets after that much
+quiet, so intermittent activity accumulates towards the cap instead of
+sidestepping it, and the duty cycle -- and with it the worst-case draw -- is
+bounded by the two numbers rather than by how busy the courts are.
+
+Capping costs little as deterrence: nobody is burgling the place during a
+tournament, and at night a single trigger brightens the panel immediately,
+which is the case the screen exists for.
+
 Dimming rather than blanking, which was the first attempt: a blanked Android
 screen suspends the page's timers, so the panel stops polling and looks dead
 from the board's side -- and a dim panel is still a panel somebody can read.
@@ -85,6 +99,19 @@ class Kiosk:
         self.bright_level = max(0, min(255, int(c.get("bright_level", 255))))
         # Do not re-issue screenOn for every frame of an incident.
         self.min_interval_s = float(c.get("min_interval_s", 20))
+        # The ceiling on one bright spell, and the rest afterwards. Without it
+        # a busy afternoon keeps extending the wake window and the panel never
+        # dims at all; with it the duty cycle is bounded whatever happens on
+        # the courts. 0 lifts the cap.
+        self.max_bright_s = max(0.0, float(c.get("max_bright_seconds", 300)))
+        self.cooldown_s = max(0.0, float(c.get("cooldown_seconds", 600)))
+        if self.max_bright_s and not self.cooldown_s:
+            # A cap with no rest would dim the panel and re-brighten it on the
+            # next trigger, flipping it at tick rate for as long as the
+            # activity lasted -- worse than no cap at all.
+            log.warning("kiosk.max_bright_seconds needs a cooldown_seconds to "
+                        "rest for; leaving the screen uncapped")
+            self.max_bright_s = 0.0
         self.timeout_s = float(c.get("timeout_s", TIMEOUT_S))
         self.capacity_mah = int(c.get("battery_mah", 7900))
         self._opener = opener or urllib.request.urlopen
@@ -92,7 +119,14 @@ class Kiosk:
         self._lock = threading.Lock()
         self._awake_until = 0.0
         self._last_cmd_at = None
+        # When the current bright spell began, when the panel last went dim,
+        # and until when it is resting. A spell survives a short dim gap: see
+        # _forget_spent_spell.
+        self._bright_since = None
+        self._dim_since = None
+        self._cool_until = 0.0
         self.woken = 0
+        self.rested = 0
         self.failed = 0
         self.last_error = ""
         self.log = None                 # set by from_config when a path is given
@@ -104,11 +138,17 @@ class Kiosk:
 
     def status(self):
         with self._lock:
+            now = self._clock()
+            lit = self._bright_since is not None
             return {"enabled": self.enabled, "configured": self.configured,
                     "host": self.host,          # not a secret; the password is
                     "idle_mode": self.idle_mode,
-                    "bright": self._awake_until > self._clock(),
-                    "woken": self.woken, "failed": self.failed,
+                    "bright": self._awake_until > now,
+                    "bright_for": round(now - self._bright_since) if lit else 0,
+                    "max_bright_s": self.max_bright_s,
+                    "resting": max(0, round(self._cool_until - now)),
+                    "woken": self.woken, "rested": self.rested,
+                    "failed": self.failed,
                     "last_error": self.last_error,
                     "reading": self.last_reading}
 
@@ -201,6 +241,47 @@ class Kiosk:
             self.log.record(row)
         return self.last_reading
 
+    # ------------------------------------------------------------- the cap
+    def _forget_spent_spell(self, now):
+        """Caller holds the lock. End the bright spell once it has been dim
+        long enough.
+
+        Deliberately not "ended the moment the window expired": triggers that
+        arrive every few minutes would then restart the clock every time and
+        never reach the cap, which is exactly the pattern a busy afternoon
+        produces. A spell ends when the panel has actually been dim for the
+        length of a cooldown.
+        """
+        if (self._bright_since is not None
+                and self._awake_until <= now
+                and self._dim_since is not None
+                and now - self._dim_since >= self.cooldown_s):
+            self._bright_since = None
+
+    def _spell_is_spent(self, now):
+        """Caller holds the lock.
+
+        A spell is measured in wall time from its first trigger rather than in
+        bright seconds accumulated. The panel can only be bright inside a
+        spell, so wall time bounds it from above -- at most max_bright_seconds
+        of brightness in any max_bright_seconds + cooldown_seconds stretch,
+        whatever shape the activity takes. Counting lit seconds instead would
+        be a truer label and a weaker guarantee, and it is the guarantee the
+        battery cares about.
+        """
+        return (self.max_bright_s > 0 and self._bright_since is not None
+                and now - self._bright_since >= self.max_bright_s)
+
+    def _rest(self, now):
+        """Caller holds the lock. Dim it and refuse to brighten for a while."""
+        lit_for = now - (self._bright_since or now)
+        self._awake_until = 0.0
+        self._bright_since = None
+        self._dim_since = now
+        self._cool_until = now + self.cooldown_s
+        self.rested += 1
+        return lit_for
+
     # ---------------------------------------------------------------- calls
     def wake(self, why=""):
         """Turn the screen on. Cheap to call repeatedly; it rate-limits."""
@@ -208,28 +289,67 @@ class Kiosk:
             return False
         now = self._clock()
         with self._lock:
-            if (self._last_cmd_at is not None
-                    and now - self._last_cmd_at < self.min_interval_s):
-                # Already on and recently told so; just extend the window.
-                self._awake_until = now + self.wake_s
+            self._forget_spent_spell(now)
+            if now < self._cool_until:
+                # Resting after a long bright spell. Not even the window is
+                # extended: that would brighten the panel the instant the rest
+                # ran out, for as long as the activity lasted.
                 return False
-            self._last_cmd_at = now
-            self._awake_until = now + self.wake_s
-            self.woken += 1
+            if self._spell_is_spent(now):
+                lit_for = self._rest(now)
+                spent = True
+            else:
+                spent = False
+                if self._bright_since is None:
+                    self._bright_since = now
+                if (self._last_cmd_at is not None
+                        and now - self._last_cmd_at < self.min_interval_s):
+                    # Already on and recently told so; just extend the window.
+                    self._awake_until = now + self.wake_s
+                    return False
+                self._last_cmd_at = now
+                self._awake_until = now + self.wake_s
+                self.woken += 1
+        if spent:
+            log.info("the wall panel has been bright for %.0f min; resting it "
+                     "for %.0f min", lit_for / 60.0, self.cooldown_s / 60.0)
+            self._apply(False)
+            return False
         log.info("brightening the wall panel%s", (" (%s)" % why) if why else "")
         self._apply(True)
         return True
 
     def tick(self):
-        """Let the screen sleep again once the wake window has passed."""
+        """Let the screen sleep again once the wake window has passed.
+
+        Also where the cap is enforced, because this runs on every pass of the
+        controller's loop whether or not anything is happening -- waiting for
+        the next trigger to notice would leave the panel bright for a whole
+        wake window past the ceiling.
+        """
         if not self.configured:
             return False
         with self._lock:
-            if not self._awake_until or self._awake_until > self._clock():
+            now = self._clock()
+            self._forget_spent_spell(now)
+            if self._awake_until > now:
+                if not self._spell_is_spent(now):
+                    return False
+                lit_for = self._rest(now)
+                spent = True
+            elif not self._awake_until:
                 return False
-            self._awake_until = 0.0
-        log.info("letting the wall panel go %s",
-                 "dim" if self.idle_mode == "dim" else "dark")
+            else:
+                self._awake_until = 0.0
+                self._dim_since = now
+                spent = False
+                lit_for = 0.0
+        if spent:
+            log.info("the wall panel has been bright for %.0f min; resting it "
+                     "for %.0f min", lit_for / 60.0, self.cooldown_s / 60.0)
+        else:
+            log.info("letting the wall panel go %s",
+                     "dim" if self.idle_mode == "dim" else "dark")
         self._apply(False)
         return True
 

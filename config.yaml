@@ -330,6 +330,22 @@ kiosk:
   wake_seconds: 120         # how long it stays bright after a trigger
   min_interval_s: 20        # do not re-issue the command for every frame
 
+  # The ceiling on one bright spell, and the rest that follows it. A trigger
+  # extends the wake window, so on a busy afternoon -- a tournament, a club
+  # evening -- triggers arrive faster than the window expires and the panel
+  # would sit at full brightness for hours, losing the charge race it was
+  # dimmed to win. These two bound the duty cycle instead: at most 5 minutes
+  # bright in any 15, whatever happens on the courts. The spell only resets
+  # after a full cooldown of quiet, so intermittent activity accumulates
+  # towards the cap rather than sidestepping it.
+  #
+  # It costs little as deterrence: nobody is burgling the place during a
+  # tournament, and at night the first trigger still brightens the panel at
+  # once, which is the case the screen exists for. max_bright_seconds: 0
+  # lifts the cap.
+  max_bright_seconds: 300
+  cooldown_seconds: 600
+
   # dim: idle at dim_level, full brightness on a trigger. Better than off --
   # a blanked Android screen suspends the page's timers, so the panel stops
   # polling and looks dead from the board's side, and a dim panel is still a

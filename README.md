@@ -171,6 +171,17 @@ stops polling and looks dead from the board's side, and a dim panel is still
 one somebody can read. All three hang off the same state transition, so a path
 added later cannot miss them.
 
+The bright time is capped, because a trigger extends the wake window and a
+tournament produces triggers faster than the window expires: the panel would
+have sat at full brightness all afternoon and lost the charge race the dimming
+was introduced to win. After `max_bright_seconds` it drops to dim and refuses
+to brighten for `cooldown_seconds` — at most five minutes bright in any
+fifteen, whatever happens on the courts. The spell resets only after a full
+cooldown of quiet, so activity arriving every few minutes accumulates towards
+the cap instead of restarting the clock forever. It costs little as
+deterrence: nobody is burgling the place during a tournament, and at night the
+first trigger still brightens the panel at once.
+
 **Notifying.** A push notification to a phone via [ntfy](https://ntfy.sh),
 with the incident's still attached, downscaled first because this runs on a
 mobile bundle — a 277 kB still goes out as 26 kB. The policy above decides

@@ -394,8 +394,11 @@ def main(argv=None):
 
     wall = kiosk_mod.from_config(cfg)
     if wall.configured:
-        log.info("the wall panel's screen will wake on a trigger for %.0fs "
-                 "(%s)", wall.wake_s, wall.host)
+        log.info("the wall panel's screen will wake on a trigger for %.0fs, "
+                 "%s (%s)", wall.wake_s,
+                 ("at most %.0fs bright then %.0fs dim"
+                  % (wall.max_bright_s, wall.cooldown_s)) if wall.max_bright_s
+                 else "uncapped", wall.host)
     elif wall.enabled:
         log.warning("kiosk.enabled is set but the host or the remote-admin "
                     "password is missing; the screen will not be woken")

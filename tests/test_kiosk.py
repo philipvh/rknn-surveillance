@@ -473,3 +473,160 @@ class TestBrightIsWhatTheBoardCommanded(Base):
                  "battery": 60, "screen": True, "bright": False}]
         self.assertIsNone(kiosk.rates(rows)["dim"]["ma"],
                           "it rated across an unattributable row")
+
+
+class TestTheBrightTimeIsCapped(Base):
+    """A tournament must not do what an always-on screen did.
+
+    A trigger extends the wake window, so an afternoon of activity used to
+    hold the panel at full brightness for hours -- the exact draw the dimming
+    was introduced to avoid. After max_bright_seconds it rests, whatever is
+    still happening in front of the camera.
+    """
+
+    def cap(self, **over):
+        c = {"max_bright_seconds": 300, "cooldown_seconds": 600}
+        c.update(over)
+        return self.build(**c)
+
+    def dimmed(self):
+        return [u for u in self.http.urls if "value=6" in u]
+
+    def lit(self):
+        return [u for u in self.http.urls if "cmd=screenOn" in u]
+
+    def test_continuous_activity_dims_the_panel_at_the_cap(self):
+        k = self.cap()
+        k.wake("first")
+        for _ in range(4):                      # a trigger every 60s
+            self.now[0] += 60
+            k.wake("still going")
+        self.settle(k)
+        self.assertTrue(k.status()["bright"], "rested before the cap")
+        self.http.urls.clear()
+        self.now[0] += 60                       # t=1300: the cap
+        self.assertFalse(k.wake("and on"), "it stayed bright past the cap")
+        self.settle(k)
+        self.assertTrue(self.dimmed(), "the panel was never told to dim")
+        self.assertFalse(k.status()["bright"])
+        self.assertEqual(k.status()["rested"], 1)
+
+    def test_tick_enforces_the_cap_without_a_new_trigger(self):
+        """One trigger with a long wake window would otherwise outlast the
+        cap by a whole window: nothing calls wake() to notice."""
+        k = self.cap(wake_seconds=600)
+        k.wake("one long look")
+        self.settle(k)
+        self.http.urls.clear()
+        self.now[0] += 299
+        self.assertFalse(k.tick(), "it rested before the cap")
+        self.now[0] += 2                        # t=1301
+        self.assertTrue(k.tick())
+        self.settle(k)
+        self.assertTrue(self.dimmed())
+
+    def test_a_trigger_during_the_rest_leaves_it_dim(self):
+        k = self.cap()
+        k.wake("first")
+        self.now[0] += 300
+        k.wake("the cap")                       # rests here
+        self.settle(k)
+        self.http.urls.clear()
+        self.now[0] += 599                      # still resting
+        self.assertFalse(k.wake("knocking"))
+        self.settle(k)
+        self.assertEqual(self.lit(), [], "it brightened during the rest")
+        self.assertFalse(k.status()["bright"])
+        self.assertGreater(k.status()["resting"], 0)
+
+    def test_it_brightens_again_once_the_rest_is_over(self):
+        """The cap is a duty cycle, not an off switch: the panel has to come
+        back, or an incident that outlasts one cooldown goes unwitnessed."""
+        k = self.cap()
+        k.wake("first")
+        self.now[0] += 300
+        k.wake("the cap")
+        self.settle(k)
+        self.http.urls.clear()
+        self.now[0] += 601
+        self.assertTrue(k.wake("still here"))
+        self.settle(k)
+        self.assertTrue(self.lit(), "it never came back after the rest")
+        self.assertEqual(k.status()["resting"], 0)
+
+    def test_intermittent_triggers_still_reach_the_cap(self):
+        """The spell must survive the gaps between triggers.
+
+        Ending it the moment the wake window expired would let activity that
+        arrives every few minutes -- which is what a busy afternoon looks
+        like -- restart the clock forever and never reach the cap.
+        """
+        k = self.cap()
+        k.wake("first")                         # bright 1000-1120
+        self.now[0] += 130
+        self.assertTrue(k.tick(), "the window should have expired")
+        self.now[0] += 120                      # t=1250, dim for 120s
+        self.assertTrue(k.wake("again"), "the gap was treated as a rest")
+        self.settle(k)
+        self.http.urls.clear()
+        self.now[0] += 60                       # t=1310: 310s into the spell
+        self.assertTrue(k.tick(), "the gap restarted the spell")
+        self.settle(k)
+        self.assertTrue(self.dimmed())
+        self.assertEqual(k.status()["rested"], 1)
+
+    def test_a_full_cooldown_of_quiet_starts_a_fresh_spell(self):
+        """Otherwise the first spell of the day would cap the panel for good:
+        an evening trigger would inherit the afternoon's accumulated time."""
+        k = self.cap()
+        k.wake("afternoon")
+        self.now[0] += 130
+        k.tick()                                # dim from t=1130
+        self.now[0] += 600                      # t=1730: quiet long enough
+        self.assertTrue(k.wake("evening"))
+        self.settle(k)
+        self.http.urls.clear()
+        for _ in range(4):                      # four more minutes of it
+            self.now[0] += 60
+            k.wake("still there")
+            k.tick()
+        self.settle(k)
+        # 240s into the new spell, 970s into the old one. Carrying the old
+        # spell forward would have rested the panel at the first repeat.
+        self.assertTrue(k.status()["bright"],
+                        "the fresh spell inherited the old one")
+        self.assertEqual(k.status()["rested"], 0)
+
+    def test_zero_lifts_the_cap(self):
+        k = self.cap(max_bright_seconds=0)
+        k.wake("first")
+        for _ in range(20):                     # 20 minutes of activity
+            self.now[0] += 60
+            k.wake("still going")
+        self.settle(k)
+        self.assertTrue(k.status()["bright"], "an uncapped panel rested")
+        self.assertEqual(k.status()["rested"], 0)
+
+    def test_a_cap_with_no_rest_is_refused(self):
+        """It would dim the panel and brighten it again on the next trigger,
+        flipping the screen at tick rate for as long as the activity lasted.
+        """
+        with self.assertLogs("kiosk", level="WARNING"):
+            k = self.cap(cooldown_seconds=0)
+        self.assertEqual(k.max_bright_s, 0)
+        k.wake("first")
+        self.now[0] += 400
+        k.wake("past the cap")
+        self.settle(k)
+        self.assertTrue(k.status()["bright"])
+
+    def test_a_resting_panel_is_logged_as_dim(self):
+        """The charge-rate buckets read this field; a rest booked as bright
+        would be charged to the regime it exists to avoid."""
+        k = self.cap()
+        k.wake("first")
+        self.now[0] += 300
+        k.wake("the cap")
+        self.settle(k)
+        row = k.poll()
+        self.assertFalse(row["bright"], "a resting panel was booked as bright")
