@@ -153,9 +153,33 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
   margin-top:3px; }
 #legal a.src { word-break:break-all; }
 #legal .warn { display:block; margin-top:4px; }
+/* The standby cover. The tablet's brightness cannot be set -- Fully needs
+   WRITE_SETTINGS, and this Android 6 build ships no screen to grant it on --
+   so the dimming is done in pixels instead. On the Tab S's AMOLED a black
+   pixel is an unlit pixel, which makes this close to the screen being off
+   while the page stays alive, keeps polling, and feels the first touch.
+   It also spares the panel the burn-in of a static UI held at full
+   brightness for hours. */
+#standby { position:fixed; left:0; top:0; right:0; bottom:0; z-index:9000;
+  background:#000; color:#2f3a35; display:none;
+  -webkit-box-align:center; -webkit-align-items:center; align-items:center;
+  -webkit-box-pack:center; -webkit-justify-content:center;
+  justify-content:center; -webkit-flex-direction:column;
+  flex-direction:column; text-align:center;
+  -webkit-transition:opacity .35s linear; transition:opacity .35s linear;
+  opacity:0; }
+#standby.on { display:-webkit-box; display:-webkit-flex; display:flex;
+  opacity:1; }
+#standby b { font-size:22px; font-weight:bold; letter-spacing:.1em;
+  text-transform:uppercase; }
+#standby span { font-size:13px; margin-top:10px; color:#242d29; }
 </style>
 </head>
 <body>
+<div id="standby"{% if standby %} class="on"{% endif %} aria-hidden="true">
+  <b>{{ site_name }}</b>
+  <span>camera surveillance &middot; touch to wake</span>
+</div>
 <div id="wrap">
   <div id="bar">
     <span id="state">&hellip;</span>
@@ -574,6 +598,60 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
   bindClick('mute2h', '/api/mute', 'muted=1&minutes=120');
   bindClick('unmute', '/api/mute', 'muted=0');
 
+  /* ---- standby --------------------------------------------------------
+     The dimming, done in pixels. Fully accepts the brightness command and
+     ignores it: on Android 6 that needs WRITE_SETTINGS, and this tablet's
+     build ships no screen to grant it on. A black page on an AMOLED panel is
+     the next best thing -- the pixels really are off -- and it has two
+     advantages over the real one. The page stays alive, so it keeps polling
+     and knows the moment to come back; and it feels the first touch itself,
+     which is how the panel answers a hand without the board having to poll
+     the tablet every second to notice one.
+
+     The board still decides. This only draws what it decided. */
+  var inStandby = {{ 'true' if standby else 'false' }};
+  var touchSentAt = 0;
+  var wokeAt = 0;
+
+  function tellTheBoard() {
+    var t = (new Date()).getTime();
+    if (t - touchSentAt < 2000) return;   /* a drag is one touch */
+    touchSentAt = t;
+    post('/api/panel/touch', '');
+  }
+
+  function setStandby(on) {
+    on = !!on;
+    if (on === inStandby) return;
+    inStandby = on;
+    var cover = document.getElementById('standby');
+    if (cover) cover.className = on ? 'on' : '';
+    /* Nothing is watching a black screen, and the stream is the expensive
+       part of this page: an <img> holding an MJPEG keeps the radio and the
+       decoder busy behind the cover for nobody. */
+    var img = document.getElementById('live');
+    if (!img) return;
+    if (on) img.removeAttribute('src');
+    else startStream();
+  }
+
+  function onTouch(e) {
+    if (inStandby) {
+      /* The cover swallows the tap that dismisses it: waking the panel and
+         pressing whatever was under the finger are not the same wish. */
+      if (e && e.preventDefault) e.preventDefault();
+      if (e && e.stopPropagation) e.stopPropagation();
+      wokeAt = (new Date()).getTime();
+      setStandby(false);
+    }
+    tellTheBoard();
+  }
+
+  /* Capture, so the cover gets the tap before anything underneath it. */
+  document.addEventListener('touchstart', onTouch, true);
+  document.addEventListener('mousedown', onTouch, true);
+  document.addEventListener('keydown', onTouch, true);
+
   /* ---- status --------------------------------------------------------- */
   function refresh() {
     var x = new XMLHttpRequest();
@@ -598,6 +676,14 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       var a = document.getElementById('arm');
       a.innerHTML = s.armed ? 'Armed' : 'Disarmed';
       a.className = 'pill ' + (s.armed ? 'armed' : 'disarmed');
+      /* A touch is believed at once -- the screen answers the hand, not the
+         next poll -- so the board's "still dark" is ignored for a moment
+         while it catches up, or the cover would snap back and then leave
+         again. */
+      if (s.screen && !(s.screen.standby
+                        && (new Date()).getTime() - wokeAt < 5000)) {
+        setStandby(s.screen.standby);
+      }
       if (s.sweep) updateSweep(s.sweep);
       updateData(s.usage);
       updateSession(s.session);
@@ -647,10 +733,10 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
      error. Reconnecting then would restart the very stream the timeout just
      stopped, so the reload is suppressed while ended. */
   live.addEventListener('error', function () {
-    if (sessionEnded) return;
+    if (sessionEnded || inStandby) return;   /* we took the src away */
     setTimeout(function () { if (!sessionEnded) startStream(); }, 5000);
   }, false);
-  setOverlays(showDetector, true);
+  setOverlays(showDetector, !inStandby);
 })();
 </script>
 </body>

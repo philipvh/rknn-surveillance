@@ -2209,7 +2209,118 @@ class TestSessionOverHttp(Base):
 
     def test_the_panel_will_not_silently_reconnect(self):
         # Without this the <img> error handler would restart the very stream
-        # the timeout just stopped, and the feature would do nothing.
+        # the timeout just stopped, and the feature would do nothing. The
+        # standby cover takes the src away for the same reason and shares the
+        # guard, so both reasons have to be in it.
         body = self.c.get("/", headers=self.auth()).data.decode()
-        self.assertIn("if (sessionEnded) return;", body)
+        self.assertIn("if (sessionEnded || inStandby) return;", body)
         self.assertIn('id="resume"', body)
+
+
+class TestTheStandbyCover(Base):
+    """The panel's dimming is done in pixels, because the tablet's brightness
+    cannot be set: Fully accepts the command and ignores it, since Android 6
+    wants WRITE_SETTINGS and that build has no screen to grant it on. A black
+    page on an AMOLED panel is the dimming that works -- and unlike a real
+    screen-off it keeps polling and feels the first touch.
+    """
+
+    class FakeKiosk:
+        configured = True
+
+        def __init__(self, bright=False):
+            self.bright = bright
+            self.touches = 0
+
+        def status(self):
+            return {"bright": self.bright}
+
+        def touch(self):
+            self.touches += 1
+            woke = not self.bright
+            self.bright = True
+            return woke
+
+    class Ctl:
+        schedule = None
+
+        def __init__(self, kiosk):
+            self.kiosk = kiosk
+
+        def status(self):
+            return {"state": "parked"}
+
+    def app_with(self, kiosk):
+        from webapp import create_app
+        app = create_app(self.cfg, ptz=self.ptz, controller=self.Ctl(kiosk),
+                         schedule=self.sched)
+        app.config["TESTING"] = True
+        return app.test_client()
+
+    def test_a_dark_panel_is_covered_from_the_first_paint(self):
+        """The board reloads this page on its way down -- that is what
+        home_on_dim is for -- so a cover that waited for the first poll would
+        answer "go dark" with two seconds of full-brightness UI."""
+        c = self.app_with(self.FakeKiosk(bright=False))
+        body = c.get("/", headers=self.auth()).data.decode()
+        self.assertIn('id="standby" class="on"', body)
+        self.assertIn("var inStandby = true;", body)
+
+    def test_a_bright_panel_is_not_covered(self):
+        c = self.app_with(self.FakeKiosk(bright=True))
+        body = c.get("/", headers=self.auth()).data.decode()
+        self.assertNotIn('id="standby" class="on"', body)
+        self.assertIn("var inStandby = false;", body)
+
+    def test_the_status_carries_the_board_s_decision(self):
+        k = self.FakeKiosk(bright=False)
+        c = self.app_with(k)
+        self.assertTrue(c.get("/api/status",
+                              headers=self.auth()).get_json()["screen"]["standby"])
+        k.bright = True
+        self.assertFalse(c.get("/api/status",
+                               headers=self.auth()).get_json()["screen"]["standby"])
+
+    def test_a_browser_that_is_not_the_wall_panel_never_blacks_itself_out(self):
+        """There is one tablet on the wall and any number of phones. A phone
+        that covered itself because the wall panel went dim would be a bug
+        with no way to undo it from the sofa."""
+        body = self.c.get("/", headers=self.auth()).data.decode()   # no kiosk
+        self.assertNotIn('id="standby" class="on"', body)
+        self.assertNotIn("screen", self.c.get("/api/status",
+                                              headers=self.auth()).get_json())
+
+    def test_a_touch_wakes_the_panel(self):
+        k = self.FakeKiosk(bright=False)
+        c = self.app_with(k)
+        r = c.post("/api/panel/touch", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["ok"])
+        self.assertEqual(k.touches, 1)
+
+    def test_a_touch_with_no_panel_is_not_an_error(self):
+        """The panel page is served to phones too, and theirs must not throw
+        a 500 at every tap."""
+        r = self.c.post("/api/panel/touch", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.get_json()["ok"])
+
+    def test_a_panel_that_throws_does_not_break_the_page(self):
+        class Broken(self.FakeKiosk):
+            def touch(self):
+                raise RuntimeError("tablet fell off the wifi")
+
+            def status(self):
+                raise RuntimeError("tablet fell off the wifi")
+
+        c = self.app_with(Broken())
+        self.assertEqual(c.post("/api/panel/touch",
+                                headers=self.auth()).status_code, 200)
+        r = c.get("/", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn('id="standby" class="on"', r.data.decode())
+
+    def test_the_page_tells_the_board_about_a_touch(self):
+        body = self.c.get("/", headers=self.auth()).data.decode()
+        self.assertIn("/api/panel/touch", body)
+        self.assertIn("addEventListener('touchstart', onTouch, true)", body)

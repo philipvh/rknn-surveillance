@@ -182,6 +182,27 @@ the cap instead of restarting the clock forever. It costs little as
 deterrence: nobody is burgling the place during a tournament, and at night the
 first trigger still brightens the panel at once.
 
+A hand on the glass is its own reason to be bright, with its own budget.
+Refusing somebody standing at the panel because the courts had been busy would
+make it look broken at the one moment it has an audience; it is also
+self-limiting, since it lasts only as long as a hand keeps it going. The page
+reports its own touches — Fully knows only the *time* of the last one, and
+polling the tablet every second to catch it would cost more than the screen
+does.
+
+The dimming itself is done in pixels rather than in Android. Fully accepts
+`screenBrightness`, answers `Saved and applied`, and changes nothing: on
+Android 6 that needs WRITE_SETTINGS, and this tablet's build has no screen to
+grant it on — `android.settings.MANAGE_WRITE_SETTINGS` resolves to no activity
+at all. So the panel page covers itself in black instead. On the Tab S's AMOLED
+a black pixel is an unlit pixel, which is most of the way to the screen being
+off, while the page stays alive, keeps polling, and feels the first touch. It
+also spares the panel the burn-in of a static UI held bright for hours. On the
+way down the board sends the panel back to its own page, because a tablet left
+on the clips browser is a tablet with no cover to draw — and only when it is
+actually showing something else, since an unconditional reload throws up a
+white loading page every time the panel settles.
+
 **Notifying.** A push notification to a phone via [ntfy](https://ntfy.sh),
 with the incident's still attached, downscaled first because this runs on a
 mobile bundle — a 277 kB still goes out as 26 kB. The policy above decides

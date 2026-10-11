@@ -431,9 +431,13 @@ class TestBrightIsWhatTheBoardCommanded(Base):
         self.assertTrue(k.poll()["bright"])
 
     def test_after_the_window_is_not_bright_though_the_screen_is_still_on(self):
+        """The row follows the command, and tick() is what issues it: between
+        the window expiring and the next pass of the loop the panel really is
+        still bright, because nothing has told it otherwise yet."""
         k = self.build(self.good())
         k.wake("trigger")
         self.now[0] += 121
+        k.tick()
         row = k.poll()
         self.assertTrue(row["screen"], "dim mode leaves the screen on")
         self.assertFalse(row["bright"], "dim was recorded as bright")
@@ -506,6 +510,7 @@ class TestTheBrightTimeIsCapped(Base):
         self.http.urls.clear()
         self.now[0] += 60                       # t=1300: the cap
         self.assertFalse(k.wake("and on"), "it stayed bright past the cap")
+        self.assertTrue(k.tick(), "tick did not settle the capped panel")
         self.settle(k)
         self.assertTrue(self.dimmed(), "the panel was never told to dim")
         self.assertFalse(k.status()["bright"])
@@ -530,6 +535,7 @@ class TestTheBrightTimeIsCapped(Base):
         k.wake("first")
         self.now[0] += 300
         k.wake("the cap")                       # rests here
+        k.tick()                                # which tick() carries out
         self.settle(k)
         self.http.urls.clear()
         self.now[0] += 599                      # still resting
@@ -546,6 +552,7 @@ class TestTheBrightTimeIsCapped(Base):
         k.wake("first")
         self.now[0] += 300
         k.wake("the cap")
+        k.tick()
         self.settle(k)
         self.http.urls.clear()
         self.now[0] += 601
@@ -627,6 +634,252 @@ class TestTheBrightTimeIsCapped(Base):
         k.wake("first")
         self.now[0] += 300
         k.wake("the cap")
+        k.tick()
         self.settle(k)
         row = k.poll()
         self.assertFalse(row["bright"], "a resting panel was booked as bright")
+
+
+class TestAHandOnTheGlass(Base):
+    """A touch is its own reason to be bright.
+
+    The cap is there because a tournament produces triggers for hours with
+    nobody looking at the wall. Somebody putting a hand on the glass is the
+    opposite case: refusing them because the courts were busy would make the
+    panel look broken at the one moment it has an audience.
+    """
+
+    def cap(self, **over):
+        c = {"max_bright_seconds": 300, "cooldown_seconds": 600,
+             "touch_seconds": 60}
+        c.update(over)
+        return self.build(**c)
+
+    def lit(self):
+        return [u for u in self.http.urls if "cmd=screenOn" in u]
+
+    def test_a_touch_brightens_the_panel(self):
+        k = self.cap()
+        self.assertTrue(k.touch())
+        self.settle(k)
+        self.assertTrue(self.lit())
+        self.assertIn("value=255", " ".join(self.http.urls))
+        self.assertEqual(k.status()["touched"], 1)
+
+    def test_a_touch_brightens_a_panel_that_is_resting(self):
+        """The whole point: the camera's budget must not gag the person
+        standing in front of the thing."""
+        k = self.cap()
+        k.wake("first")
+        self.now[0] += 300
+        k.wake("the cap")
+        k.tick()                                # resting now
+        self.settle(k)
+        self.assertGreater(k.status()["resting"], 0)
+        self.http.urls.clear()
+        self.assertTrue(k.touch(), "a resting panel ignored a hand on it")
+        self.settle(k)
+        self.assertTrue(self.lit())
+        self.assertTrue(k.status()["bright"])
+
+    def test_the_touch_window_expires(self):
+        k = self.cap()
+        k.touch()
+        self.settle(k)
+        self.now[0] += 59
+        self.assertFalse(k.tick(), "it dimmed while the hand was still there")
+        self.now[0] += 2
+        self.assertTrue(k.tick())
+        self.assertFalse(k.status()["bright"])
+
+    def test_a_touch_holds_the_panel_through_the_camera_cap(self):
+        """Two budgets, not one: the camera's running out must not pull the
+        screen out from under somebody reading it."""
+        k = self.cap()
+        k.wake("first")
+        for _ in range(4):                      # play keeps the window alive
+            self.now[0] += 60
+            k.wake("still going")
+        self.now[0] += 50                       # t=1290, 10s before the cap
+        k.touch()
+        self.settle(k)
+        self.now[0] += 20                       # t=1310: past the cap
+        self.assertFalse(k.tick(), "the cap dimmed a panel being touched")
+        self.assertTrue(k.status()["bright"])
+        self.assertEqual(k.status()["rested"], 1, "the camera was not capped")
+        self.now[0] += 60                       # the hand is gone too
+        self.assertTrue(k.tick())
+        self.assertFalse(k.status()["bright"])
+
+    def test_a_touch_does_not_hand_the_camera_its_budget_back(self):
+        """Otherwise one tap would reopen the tournament hole: the camera
+        would resume extending the window for as long as play lasted."""
+        k = self.cap()
+        k.wake("first")
+        self.now[0] += 300
+        k.wake("the cap")
+        k.tick()
+        k.touch()
+        self.settle(k)
+        self.now[0] += 30
+        self.assertFalse(k.wake("play continues"), "the camera got back in")
+        self.now[0] += 60                       # the touch window runs out
+        self.assertTrue(k.tick(), "it stayed bright on the camera's account")
+
+    def test_repeated_touching_does_not_hammer_the_tablet(self):
+        k = self.cap()
+        k.touch()
+        for _ in range(20):
+            self.now[0] += 1
+            k.touch()
+        self.settle(k)
+        self.assertEqual(len(self.lit()), 1)
+        self.assertTrue(k.status()["bright"])
+
+    def test_touching_keeps_it_up(self):
+        k = self.cap()
+        k.touch()
+        self.settle(k)
+        for _ in range(6):                      # a tap every 30s for 3 min
+            self.now[0] += 30
+            k.touch()
+            self.assertFalse(k.tick(), "it dimmed under a hand")
+        self.assertTrue(k.status()["bright"])
+
+    def test_zero_turns_touch_waking_off(self):
+        k = self.cap(touch_seconds=0)
+        self.assertFalse(k.touch())
+        self.settle(k)
+        self.assertEqual(self.http.urls, [])
+
+
+class FakePanel:
+    """Fully, answering deviceInfo with a page of its own choosing."""
+
+    def __init__(self, page, home="http://panel/", info=True, touched_s=9999):
+        self.page, self.home, self.info = page, home, info
+        self.touched_s = touched_s      # how long ago the glass was touched
+        self.urls = []
+        self.done = threading.Event()
+
+    def __call__(self, url, timeout=None):
+        self.urls.append(url)
+        self.done.set()
+        if "deviceInfo" in url:
+            if not self.info:
+                raise urllib.error.URLError("no answer")
+            now_ms = 1791742052829
+            body = json.dumps({"batteryLevel": 90, "isPlugged": True,
+                               "screenOn": True, "currentPage": self.page,
+                               "startUrl": self.home, "timestamp": now_ms,
+                               "lastUserInteractionTime":
+                                   now_ms - int(self.touched_s * 1000)}).encode()
+        else:
+            body = b"OK"
+
+        class R:
+            def read(self_inner):
+                return body
+
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+        return R()
+
+
+class TestItGoesHomeOnTheWayDown(Base):
+    """Somebody who left the panel on the clips browser left it on a page
+    that is not the panel -- and, on a tablet whose brightness we cannot set,
+    on a page with no standby cover, so the screen would stay lit all night.
+    """
+
+    def panel(self, page, **over):
+        self.http = FakePanel(page)
+        c = {"enabled": True, "host": "10.0.0.5", "password": "pw"}
+        c.update(over)
+        self.now = [1000.0]
+        return kiosk.Kiosk(c, opener=self.http, clock=lambda: self.now[0])
+
+    def home_sent(self):
+        return [u for u in self.http.urls if "loadStartUrl" in u]
+
+    def test_a_panel_left_elsewhere_is_sent_home(self):
+        k = self.panel("http://panel/media")
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertTrue(self.home_sent(), "it was left on the clips browser")
+
+    def test_a_panel_already_home_is_left_alone(self):
+        """An unconditional reload throws up a white loading page every time
+        the panel settles -- a flash of light from the thing just told to go
+        dark."""
+        k = self.panel("http://panel/")
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertEqual(self.home_sent(), [], "it reloaded for nothing")
+
+    def test_a_trailing_slash_is_not_another_page(self):
+        k = self.panel("http://panel")
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertEqual(self.home_sent(), [])
+
+    def test_an_unreadable_panel_is_sent_home_anyway(self):
+        """A flash beats leaving the settings page lit all night."""
+        self.http = FakePanel("http://panel/media", info=False)
+        k = kiosk.Kiosk({"enabled": True, "host": "10.0.0.5", "password": "pw"},
+                        opener=self.http, clock=lambda: self.now[0])
+        self.now = [1000.0]
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertTrue(self.home_sent())
+
+    def test_it_is_not_sent_home_on_the_way_up(self):
+        k = self.panel("http://panel/media")
+        k.wake("trigger")
+        self.settle(k)
+        self.assertEqual(self.home_sent(), [],
+                         "it reloaded the page somebody was looking at")
+
+    def test_a_panel_somebody_is_using_is_left_alone(self):
+        """A member going through last night's clips is on a page that does
+        not report its own touches. Yanking them back to the panel mid-clip
+        would be the screen fighting its user."""
+        self.http = FakePanel("http://panel/media", touched_s=20)
+        self.now = [1000.0]
+        k = kiosk.Kiosk({"enabled": True, "host": "10.0.0.5", "password": "pw"},
+                        opener=self.http, clock=lambda: self.now[0])
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertEqual(self.home_sent(), [], "it interrupted somebody")
+
+    def test_a_panel_abandoned_on_another_page_is_still_sent_home(self):
+        self.http = FakePanel("http://panel/media", touched_s=600)
+        self.now = [1000.0]
+        k = kiosk.Kiosk({"enabled": True, "host": "10.0.0.5", "password": "pw"},
+                        opener=self.http, clock=lambda: self.now[0])
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertTrue(self.home_sent(), "it was left on the clips browser")
+
+    def test_home_on_dim_off_leaves_the_page_alone(self):
+        k = self.panel("http://panel/media", home_on_dim=False)
+        k.wake("trigger")
+        self.now[0] += 121
+        k.tick()
+        self.settle(k)
+        self.assertEqual(self.home_sent(), [])

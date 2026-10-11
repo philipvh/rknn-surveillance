@@ -346,6 +346,30 @@ kiosk:
   max_bright_seconds: 300
   cooldown_seconds: 600
 
+  # A hand on the glass is its own reason to be bright, with its own budget:
+  # somebody standing at the panel wants to read it, and being told "no, the
+  # camera used up the brightness this quarter-hour" is the panel looking
+  # broken. Self-limiting -- it lasts this long unless a hand keeps it going.
+  # The panel page reports the touch itself; Fully only knows the time of the
+  # last one, and polling the tablet every second to catch it would cost more
+  # than the screen does. 0 turns touch waking off.
+  touch_seconds: 60
+
+  # Send the panel back to its own page on the way down. Somebody who left it
+  # on the clips browser left it on a page that is not the panel -- and, on a
+  # tablet whose brightness cannot be set, on a page with no standby cover,
+  # so the screen would stay lit all night. Only reloaded when it is actually
+  # showing something else: an unconditional reload throws up a white loading
+  # page every time the panel settles.
+  home_on_dim: true
+
+  # ... but not out from under somebody. Only the panel page reports its own
+  # touches; a member going through last night's clips is on a page that does
+  # not, and yanking them back mid-clip would be the screen fighting its user.
+  # Fully knows when the glass was last touched whatever page was showing, so
+  # the panel is left alone until this long after the last touch.
+  home_grace_seconds: 300
+
   # dim: idle at dim_level, full brightness on a trigger. Better than off --
   # a blanked Android screen suspends the page's timers, so the panel stops
   # polling and looks dead from the board's side, and a dim panel is still a

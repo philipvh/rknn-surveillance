@@ -406,6 +406,22 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         if ptz is None:
             abort(503, "camera control is not available in this process")
 
+    def panel_standby():
+        """Should the wall panel be showing its standby cover right now?
+
+        None when there is no wall panel to speak of, which the page reads as
+        "never cover yourself" -- a browser on somebody's phone is not the
+        tablet on the wall and must not black itself out.
+        """
+        wall = getattr(controller, "kiosk", None) if controller else None
+        if wall is None or not wall.configured:
+            return None
+        try:
+            return not wall.status()["bright"]
+        except Exception:
+            log.exception("wall panel status failed")
+            return None
+
     # ---------------------------------------------------------------- pages
     @app.route("/")
     @protected
@@ -413,6 +429,11 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         return render_template(
             "panel.html",
             presets=(cfg._get("ptz", "scan_presets", default=[]) or []),
+            # Covered from the first paint, not from the first poll. The
+            # board reloads this page on its way down -- that is the point of
+            # home_on_dim -- so without it the panel answers "go dark" with
+            # two seconds of full-brightness UI.
+            standby=panel_standby(),
             home=cfg._get("ptz", "home_preset", default="Home"),
             keepalive_ms=int(web.get("keepalive_ms", 250)),
             # A locked Manual tab is not hidden to keep a secret -- the
@@ -1465,6 +1486,14 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         if live is not None:
             out["detector_frame_age_s"] = (round(live.age, 1)
                                            if live.age is not None else None)
+        # The page draws its own standby cover, because on this tablet the
+        # brightness command is accepted and ignored -- Android 6 wants a
+        # permission the device has no screen to grant it on. A black page on
+        # an AMOLED panel is the dimming we can actually do, and the board
+        # stays the one deciding when.
+        standby = panel_standby()
+        if standby is not None:
+            out["screen"] = {"standby": standby}
         if health is not None:
             try:
                 out["health"] = health.status(cfg.events_root)
@@ -1681,6 +1710,28 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             abort(503)
         controller.request_scan()
         return jsonify(ok=True)
+
+    @app.route("/api/panel/touch", methods=["POST"])
+    @protected
+    def api_panel_touch():
+        """Somebody put a hand on the wall panel.
+
+        The board cannot see a touch -- Fully only reports the time of the
+        last one, and polling the tablet every second to catch it would cost
+        more than the screen does. The page is already in front of the
+        person, so it says so itself, and the board decides what that is
+        worth. Cheap and idempotent: the kiosk rate-limits the command, and a
+        panel that is already bright is simply held up.
+        """
+        wall = getattr(controller, "kiosk", None) if controller else None
+        if wall is None or not wall.configured:
+            return jsonify(ok=False, reason="no panel"), 200
+        try:
+            woke = wall.touch()
+        except Exception:
+            log.exception("could not wake the wall panel on a touch")
+            return jsonify(ok=False), 200
+        return jsonify(ok=True, woke=bool(woke))
 
     @app.route("/api/arm", methods=["POST"])
     @protected

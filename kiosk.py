@@ -105,6 +105,23 @@ class Kiosk:
         # the courts. 0 lifts the cap.
         self.max_bright_s = max(0.0, float(c.get("max_bright_seconds", 300)))
         self.cooldown_s = max(0.0, float(c.get("cooldown_seconds", 600)))
+        # A hand on the glass is its own reason to be bright, with its own
+        # budget. Somebody standing at the panel wants to read it, and being
+        # told "no, the camera used up the brightness this quarter-hour" is
+        # the panel looking broken. Deliberate and self-limiting: it stays
+        # bright only as long as somebody keeps touching it.
+        self.touch_s = max(0.0, float(c.get("touch_seconds", 60)))
+        # Put the panel back on its own page before it goes dark. Somebody
+        # who left it on the clips browser has left it on a page that is not
+        # the panel -- and, on a tablet whose brightness we cannot set, on a
+        # page without the standby cover, so the screen stays lit.
+        self.home_on_dim = bool(c.get("home_on_dim", True))
+        # ... but not out from under somebody. Only the panel page reports
+        # its own touches; a member going through last night's clips is on a
+        # page that does not, and yanking them back to the panel mid-clip
+        # would be the screen fighting its user. Fully knows when the glass
+        # was last touched, whatever page was showing.
+        self.home_grace_s = max(0.0, float(c.get("home_grace_seconds", 300)))
         if self.max_bright_s and not self.cooldown_s:
             # A cap with no rest would dim the panel and re-brighten it on the
             # next trigger, flipping it at tick rate for as long as the
@@ -125,7 +142,11 @@ class Kiosk:
         self._bright_since = None
         self._dim_since = None
         self._cool_until = 0.0
+        self._touch_until = 0.0
+        # What the board last COMMANDED, which is the only thing it can know.
+        self._lit = False
         self.woken = 0
+        self.touched = 0
         self.rested = 0
         self.failed = 0
         self.last_error = ""
@@ -139,15 +160,17 @@ class Kiosk:
     def status(self):
         with self._lock:
             now = self._clock()
-            lit = self._bright_since is not None
+            spell = self._bright_since is not None
             return {"enabled": self.enabled, "configured": self.configured,
                     "host": self.host,          # not a secret; the password is
                     "idle_mode": self.idle_mode,
-                    "bright": self._awake_until > now,
-                    "bright_for": round(now - self._bright_since) if lit else 0,
+                    "bright": self._lit,
+                    "bright_for": round(now - self._bright_since) if spell else 0,
                     "max_bright_s": self.max_bright_s,
                     "resting": max(0, round(self._cool_until - now)),
-                    "woken": self.woken, "rested": self.rested,
+                    "touched_until": max(0, round(self._touch_until - now)),
+                    "woken": self.woken, "touched": self.touched,
+                    "rested": self.rested,
                     "failed": self.failed,
                     "last_error": self.last_error,
                     "reading": self.last_reading}
@@ -201,10 +224,48 @@ class Kiosk:
             cmd, extra = self._brightness(
                 self.bright_level if bright else self.dim_level)
             self._send(cmd, **extra)
-            if not bright and self.idle_mode == "off":
-                self._send("screenOff")
+            if not bright:
+                if self.home_on_dim:
+                    self._go_home()
+                if self.idle_mode == "off":
+                    self._send("screenOff")
         threading.Thread(target=run, daemon=True,
                          name="kiosk-%s" % ("bright" if bright else "dim")).start()
+
+    def _go_home(self):
+        """Send the panel back to its own page before it goes dark.
+
+        Only when it is actually showing something else: an unconditional
+        reload throws up a white loading page every time the panel settles,
+        which at three in the morning is a flash of light from the thing that
+        was just told to go dark. Fully reports both halves of the comparison
+        in one call, so this costs one request on the way down.
+        """
+        try:
+            with self._opener(self._url("deviceInfo", type="json"),
+                              timeout=self.timeout_s) as r:
+                d = json.loads(r.read().decode("utf-8", "replace"))
+            page = str(d.get("currentPage") or "")
+            home = str(d.get("startUrl") or "")
+            if home and page.rstrip("/") == home.rstrip("/"):
+                return False
+            # Both in the tablet's own clock, so no agreement about the time
+            # is needed between the two machines.
+            now_ms, touched_ms = d.get("timestamp"), d.get(
+                "lastUserInteractionTime")
+            if (self.home_grace_s and isinstance(now_ms, int)
+                    and isinstance(touched_ms, int)
+                    and 0 <= now_ms - touched_ms < self.home_grace_s * 1000):
+                log.info("leaving the wall panel on %s; it was touched %.0fs "
+                         "ago", page, (now_ms - touched_ms) / 1000.0)
+                return False
+        except Exception as e:
+            # Cannot tell where it is; reloading is the safer half of the
+            # trade -- a flash beats leaving the settings page lit all night.
+            log.info("could not read the wall panel's page (%s); "
+                     "sending it home anyway", e)
+        self._send("loadStartUrl")
+        return True
 
     # ---------------------------------------------------------------- read
     def poll(self):
@@ -234,7 +295,7 @@ class Kiosk:
         # tell bright from dim -- bucketing on it produced two hours of
         # readings labelled "bright" that were simply all of them, and a dim
         # bucket that could never populate.
-        row["bright"] = bool(self._awake_until > self._clock())
+        row["bright"] = bool(self._lit)
         self.last_reading = dict(row, t=dt.datetime.now().isoformat(
             timespec="seconds"))
         if self.log is not None:
@@ -273,14 +334,19 @@ class Kiosk:
                 and now - self._bright_since >= self.max_bright_s)
 
     def _rest(self, now):
-        """Caller holds the lock. Dim it and refuse to brighten for a while."""
-        lit_for = now - (self._bright_since or now)
+        """Caller holds the lock. End the spell and refuse the camera a while.
+
+        Does not dim the panel itself: a hand on the glass has its own budget
+        and may be holding the screen up. tick() owns the falling edge.
+        """
         self._awake_until = 0.0
         self._bright_since = None
-        self._dim_since = now
         self._cool_until = now + self.cooldown_s
         self.rested += 1
-        return lit_for
+
+    def _want_bright(self, now):
+        """Caller holds the lock. Either budget is reason enough."""
+        return self._awake_until > now or self._touch_until > now
 
     # ---------------------------------------------------------------- calls
     def wake(self, why=""):
@@ -296,26 +362,48 @@ class Kiosk:
                 # ran out, for as long as the activity lasted.
                 return False
             if self._spell_is_spent(now):
-                lit_for = self._rest(now)
-                spent = True
-            else:
-                spent = False
-                if self._bright_since is None:
-                    self._bright_since = now
-                if (self._last_cmd_at is not None
-                        and now - self._last_cmd_at < self.min_interval_s):
-                    # Already on and recently told so; just extend the window.
-                    self._awake_until = now + self.wake_s
-                    return False
-                self._last_cmd_at = now
+                # tick() dims it, on the next pass of the loop it is already
+                # on -- one place owns the falling edge, and it is the one
+                # that knows whether a hand is keeping the screen up.
+                self._rest(now)
+                return False
+            if self._bright_since is None:
+                self._bright_since = now
+            if (self._last_cmd_at is not None
+                    and now - self._last_cmd_at < self.min_interval_s):
+                # Already on and recently told so; just extend the window.
                 self._awake_until = now + self.wake_s
-                self.woken += 1
-        if spent:
-            log.info("the wall panel has been bright for %.0f min; resting it "
-                     "for %.0f min", lit_for / 60.0, self.cooldown_s / 60.0)
-            self._apply(False)
-            return False
+                return False
+            self._last_cmd_at = now
+            self._awake_until = now + self.wake_s
+            self._lit = True
+            self.woken += 1
         log.info("brightening the wall panel%s", (" (%s)" % why) if why else "")
+        self._apply(True)
+        return True
+
+    def touch(self, why="touched"):
+        """Somebody put a hand on the panel. Bright, whatever the camera says.
+
+        Deliberately outside the camera's budget rather than inside it. The
+        cap exists because a tournament generates triggers for hours without
+        anybody looking at the wall; a person touching the glass is the
+        opposite case, and refusing them because the courts were busy would
+        make the panel look broken at exactly the moment it has an audience.
+        It is self-limiting: it lasts touch_seconds unless a hand keeps it
+        going.
+        """
+        if not self.configured or not self.touch_s:
+            return False
+        now = self._clock()
+        with self._lock:
+            self._touch_until = now + self.touch_s
+            if self._lit:
+                return False                     # already up; just held there
+            self._lit = True
+            self._last_cmd_at = now
+            self.touched += 1
+        log.info("brightening the wall panel (%s)", why)
         self._apply(True)
         return True
 
@@ -332,24 +420,19 @@ class Kiosk:
         with self._lock:
             now = self._clock()
             self._forget_spent_spell(now)
-            if self._awake_until > now:
-                if not self._spell_is_spent(now):
-                    return False
-                lit_for = self._rest(now)
-                spent = True
-            elif not self._awake_until:
-                return False
-            else:
+            if self._awake_until > now and self._spell_is_spent(now):
+                self._rest(now)
+            elif 0 < self._awake_until <= now:
                 self._awake_until = 0.0
-                self._dim_since = now
-                spent = False
-                lit_for = 0.0
-        if spent:
-            log.info("the wall panel has been bright for %.0f min; resting it "
-                     "for %.0f min", lit_for / 60.0, self.cooldown_s / 60.0)
-        else:
-            log.info("letting the wall panel go %s",
-                     "dim" if self.idle_mode == "dim" else "dark")
+            if self._want_bright(now) or not self._lit:
+                return False
+            self._lit = False
+            self._dim_since = now
+            resting = self._cool_until > now
+        log.info("the wall panel reached its bright time; resting it for "
+                 "%.0f min" % (self.cooldown_s / 60.0) if resting
+                 else "letting the wall panel go %s"
+                 % ("dim" if self.idle_mode == "dim" else "dark"))
         self._apply(False)
         return True
 
