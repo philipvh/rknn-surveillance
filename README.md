@@ -201,7 +201,12 @@ also spares the panel the burn-in of a static UI held bright for hours. On the
 way down the board sends the panel back to its own page, because a tablet left
 on the clips browser is a tablet with no cover to draw — and only when it is
 actually showing something else, since an unconditional reload throws up a
-white loading page every time the panel settles.
+white loading page every time the panel settles. The cover belongs to that one
+tablet and is handed out by address: the same page runs on phones on the club
+wifi and on a laptop at the far end of the tunnel, and a viewer whose screen
+went black because a tablet in the clubhouse fell asleep would have nothing on
+screen to explain it. Their touches stay theirs too — a tap at home does not
+light a screen in an empty clubhouse.
 
 **Notifying.** A push notification to a phone via [ntfy](https://ntfy.sh),
 with the incident's still attached, downscaled first because this runs on a
