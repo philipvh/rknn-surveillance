@@ -8,6 +8,13 @@
 #
 # Only list what differs -- these are merged over config.yaml, key by key.
 
+web:
+  # What this installation calls itself: the panel's title bar, the standby
+  # screen on the wall, and the first word of every alert that goes out. Left
+  # unset it reads "RKNN surveillance", which is the code's name, not the
+  # club's -- the one default that every visitor reads.
+  title: "Your club"
+
 camera:
   host: 192.168.1.50
   http_port: 88
