@@ -2225,8 +2225,11 @@ class TestTheStandbyCover(Base):
     screen-off it keeps polling and feels the first touch.
     """
 
+    PANEL_IP = "192.168.8.171"
+
     class FakeKiosk:
         configured = True
+        host = "192.168.8.171"
 
         def __init__(self, bright=False):
             self.bright = bright
@@ -2250,12 +2253,19 @@ class TestTheStandbyCover(Base):
         def status(self):
             return {"state": "parked"}
 
-    def app_with(self, kiosk):
+    def app_with(self, kiosk, ip=None):
+        """A client for this kiosk, speaking from the wall panel by default.
+
+        The address matters: standby belongs to the one tablet, so every test
+        here has to say who is asking.
+        """
         from webapp import create_app
         app = create_app(self.cfg, ptz=self.ptz, controller=self.Ctl(kiosk),
                          schedule=self.sched)
         app.config["TESTING"] = True
-        return app.test_client()
+        cl = app.test_client()
+        cl.environ_base["REMOTE_ADDR"] = ip or self.PANEL_IP
+        return cl
 
     def test_a_dark_panel_is_covered_from_the_first_paint(self):
         """The board reloads this page on its way down -- that is what
@@ -2324,3 +2334,49 @@ class TestTheStandbyCover(Base):
         body = self.c.get("/", headers=self.auth()).data.decode()
         self.assertIn("/api/panel/touch", body)
         self.assertIn("addEventListener('touchstart', onTouch, true)", body)
+
+    # ------------------------------------------- one tablet, many browsers
+    def test_a_phone_is_not_covered_because_the_tablet_went_dim(self):
+        """The wall panel being dark says nothing about the phone in your
+        hand. A viewer at home, on the VPN, watching the court go quiet must
+        not have the page black itself out in front of them -- and with the
+        cover up there is nothing on screen that explains why."""
+        c = self.app_with(self.FakeKiosk(bright=False), ip="10.8.2.9")
+        body = c.get("/", headers=self.auth()).data.decode()
+        self.assertNotIn('id="standby" class="on"', body)
+        self.assertIn("var inStandby = false;", body)
+        self.assertNotIn("screen",
+                         c.get("/api/status", headers=self.auth()).get_json())
+
+    def test_the_tablet_on_the_wall_is_still_covered(self):
+        c = self.app_with(self.FakeKiosk(bright=False), ip=self.PANEL_IP)
+        self.assertIn('id="standby" class="on"',
+                      c.get("/", headers=self.auth()).data.decode())
+
+    def test_a_tap_at_home_does_not_light_the_clubhouse(self):
+        """Somebody scrolling through last night's clips in bed is not
+        somebody standing at the panel. Waking the wall for them lights a
+        screen in an empty room, all night, on the tablet's battery."""
+        k = self.FakeKiosk(bright=False)
+        c = self.app_with(k, ip="10.8.2.9")
+        r = c.post("/api/panel/touch", headers=self.auth())
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.get_json()["ok"])
+        self.assertEqual(k.touches, 0)
+
+    def test_the_panel_s_own_tap_still_counts(self):
+        k = self.FakeKiosk(bright=False)
+        c = self.app_with(k, ip=self.PANEL_IP)
+        self.assertTrue(c.post("/api/panel/touch",
+                               headers=self.auth()).get_json()["ok"])
+        self.assertEqual(k.touches, 1)
+
+    def test_a_kiosk_with_no_address_covers_nobody(self):
+        """configured is false without a host, but the cover must not depend
+        on reading that the same way twice."""
+        class Hostless(self.FakeKiosk):
+            host = ""
+
+        c = self.app_with(Hostless(bright=False), ip="")
+        self.assertNotIn('id="standby" class="on"',
+                         c.get("/", headers=self.auth()).data.decode())

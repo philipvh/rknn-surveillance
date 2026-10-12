@@ -406,15 +406,36 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         if ptz is None:
             abort(503, "camera control is not available in this process")
 
-    def panel_standby():
-        """Should the wall panel be showing its standby cover right now?
+    def _the_wall_panel():
+        """The kiosk, but only when this request is the tablet asking.
 
-        None when there is no wall panel to speak of, which the page reads as
-        "never cover yourself" -- a browser on somebody's phone is not the
-        tablet on the wall and must not black itself out.
+        Everything about standby is that one screen's business. The same page
+        is served to a phone on the club wifi and to a laptop at the other end
+        of the VPN, and blacking those out because a tablet in the clubhouse
+        went dim is a bug the viewer has no way to explain. Address, not
+        guesswork: the kiosk is configured by IP, and client_ip() is already
+        the address the auth decisions are made from, so a viewer behind the
+        forwarder reads as the forwarder and never as the panel.
         """
         wall = getattr(controller, "kiosk", None) if controller else None
         if wall is None or not wall.configured:
+            return None
+        here, there = client_ip(), str(getattr(wall, "host", "") or "")
+        try:
+            same = ipaddress.ip_address(here) == ipaddress.ip_address(there)
+        except ValueError:
+            same = bool(here) and here == there
+        return wall if same else None
+
+    def panel_standby():
+        """Should the wall panel be showing its standby cover right now?
+
+        None when this browser is not the wall panel, which the page reads as
+        "never cover yourself" -- a browser on somebody's phone is not the
+        tablet on the wall and must not black itself out.
+        """
+        wall = _the_wall_panel()
+        if wall is None:
             return None
         try:
             return not wall.status()["bright"]
@@ -1722,9 +1743,13 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
         person, so it says so itself, and the board decides what that is
         worth. Cheap and idempotent: the kiosk rate-limits the command, and a
         panel that is already bright is simply held up.
+
+        Only the tablet's own touches count. A tap on a phone three provinces
+        away is not somebody standing at the clubhouse, and lighting the wall
+        for them would be a screen nobody is in front of.
         """
-        wall = getattr(controller, "kiosk", None) if controller else None
-        if wall is None or not wall.configured:
+        wall = _the_wall_panel()
+        if wall is None:
             return jsonify(ok=False, reason="no panel"), 200
         try:
             woke = wall.touch()
