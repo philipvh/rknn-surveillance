@@ -43,6 +43,10 @@ class FakePTZ:
     def settled(self):
         return self._settled
 
+    def snapshot(self):
+        self.snaps = getattr(self, "snaps", 0) + 1
+        return b"a frame"
+
     def goto_preset(self, name, source="auto", is_scan_start=False,
                     essential=False):
         # `essential` is how coming home survives an exhausted budget; a fake
@@ -1017,3 +1021,135 @@ class TestEveryPathIntoASweepWakesTheWall(unittest.TestCase):
         self.c.on_detection(Detection(self.wall_clock, 1, 0.9, ["person"]))
         self.assertIs(self.c.state, State.SWEEPING,
                       "a dead tablet stopped the camera sweeping")
+
+
+class FakeAim:
+    """Stands in for aimwatch.AimWatch: the maths has its own tests."""
+
+    enabled = True
+
+    def __init__(self, due=False, drifted=False, recognisable=True):
+        self._due = due
+        self._drifted = drifted
+        self._recognisable = recognisable
+        self.checked = []
+
+    def due(self):
+        return self._due
+
+    def check(self, frame):
+        self.checked.append(frame)
+        from collections import namedtuple
+        R = namedtuple("R", "dx dy shift confidence recognisable drifted")
+        return R(40.0, 12.0, 41.8, 30.0, self._recognisable, self._drifted)
+
+    def message(self, reading):
+        return "the view has moved"
+
+
+class FakeNotifier:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, title, message, image=None, tags=()):
+        self.sent.append((title, message, bool(image)))
+        return True
+
+    def send_incident(self, inc, url=None):
+        return True
+
+
+class TestTheAimIsWatched(Base):
+    """The check that would have caught twelve days of filming a ceiling.
+
+    The camera cannot report where it is pointing, so the software's own
+    account of the view is worthless: it says "at Home" because that is the
+    preset it asked for. Only a picture can disagree.
+    """
+
+    def build(self, **kw):
+        self.aim = FakeAim(**kw)
+        self.notes = FakeNotifier()
+        self.c = Controller(
+            self.cfg, self.ptz, self.sched, self.policy, self.shadow,
+            aim=self.aim, notifier=self.notes,
+            clip_fn=lambda s, e: None, snapshot_fn=lambda: "snap.jpg",
+            clock=lambda: self.now, wall=lambda: self.wall)
+        return self.c
+
+    def test_a_quiet_parked_camera_gets_checked(self):
+        c = self.build(due=True)
+        c.tick()
+        self.assertEqual(len(self.aim.checked), 1)
+
+    def test_it_costs_nothing_on_the_days_it_is_not_due(self):
+        """Asked on every pass of the loop, so the cheap question has to come
+        first: no snapshot, no decode, no FFT."""
+        c = self.build(due=False)
+        for _ in range(50):
+            c.tick()
+        self.assertEqual(self.aim.checked, [])
+        self.assertEqual(getattr(self.ptz, "snaps", 0), 0)
+
+    def test_a_swinging_camera_is_not_asked(self):
+        """A frame taken mid-move is a blur, and a blur compared against a
+        still reference is a false alarm."""
+        c = self.build(due=True)
+        self.ptz._settled = False
+        c.tick()
+        self.assertEqual(self.aim.checked, [])
+
+    def test_it_waits_until_the_incident_is_over(self):
+        """A window can be open while the camera stays parked -- that is the
+        PIR case, and the sweep-off case. The camera is then pointing where
+        it was told to point for a reason, and a frame grabbed in the middle
+        of it is a frame of whatever the trigger is about, not of the rest
+        view. Comparing that against the reference alarms about the system
+        working as designed.
+
+        Reaching into _incident on purpose: the state machine has a dozen
+        ways to open a window and only one of them matters here, which is
+        that one is open at all.
+        """
+        c = self.build(due=True)
+        with c._lock:
+            c._open_incident(self.wall, "pir")
+        self.assertIs(c.state, State.PARKED)
+        c.tick()
+        self.assertEqual(self.aim.checked, [])
+        # and it resumes once the window closes
+        c._incident = None
+        c.tick()
+        self.assertEqual(len(self.aim.checked), 1)
+
+    def test_drift_reaches_a_phone(self):
+        c = self.build(due=True, drifted=True)
+        c.tick()
+        self.assertEqual(len(self.notes.sent), 1)
+        title, message, had_image = self.notes.sent[0]
+        self.assertIn("moved", title + message)
+        self.assertTrue(had_image)      # the picture IS the evidence
+
+    def test_a_steady_view_says_nothing(self):
+        c = self.build(due=True, drifted=False)
+        c.tick()
+        self.assertEqual(self.notes.sent, [])
+
+    def test_a_camera_that_will_not_answer_is_not_a_crash(self):
+        """The aim check is a nicety. The surveillance is not."""
+        c = self.build(due=True)
+
+        def boom():
+            raise OSError("camera off the wifi")
+
+        self.ptz.snapshot = boom
+        c.tick()                        # must not raise
+        self.assertEqual(self.aim.checked, [])
+
+    def test_no_watcher_configured_changes_nothing(self):
+        c = self.build(due=True)
+        c.aim = None
+        c.tick()
+        self.assertEqual(self.notes.sent, [])
+
+

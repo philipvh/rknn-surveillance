@@ -1935,6 +1935,39 @@ class TestSweepNow(Base):
         self.assertTrue(r.get_json()["ok"])
         self.assertFalse(r.get_json()["boot"])
 
+    def test_set_home_also_takes_the_reference_picture(self):
+        """One button, one wish: this is the view, watch it. A reference that
+        needs a second button is a reference nobody takes, and then the daily
+        check has nothing to compare against."""
+        class Watch:
+            enabled = True
+
+            def __init__(self):
+                self.refs = []
+
+            def set_reference(self, jpeg):
+                self.refs.append(jpeg)
+
+        w = Watch()
+        self.ctrl.aim = w
+        r = self.c.post("/api/ptz/home/set", headers=self.auth())
+        self.assertTrue(r.get_json()["watched"])
+        self.assertEqual(len(w.refs), 1)
+        self.assertIn("snapPicture2", self.cam.calls)
+
+    def test_a_reference_that_cannot_be_taken_does_not_lose_the_home(self):
+        class Broken:
+            enabled = True
+
+            def set_reference(self, jpeg):
+                raise OSError("camera off the wifi")
+
+        self.ctrl.aim = Broken()
+        r = self.c.post("/api/ptz/home/set", headers=self.auth())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertFalse(r.get_json()["watched"])
+        self.assertIn("ptzAddPresetPoint", self.cam.calls)
+
     def test_calibrate_drives_to_the_end_stops(self):
         r = self.c.post("/api/ptz/calibrate", headers=self.auth())
         self.assertTrue(r.get_json()["ok"])

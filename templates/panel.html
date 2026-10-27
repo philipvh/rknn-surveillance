@@ -480,8 +480,13 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
       e.preventDefault();
       post('/api/ptz/home/set', '', function (r) {
         if (r && r.ok) {
-          say(r.boot ? 'Saved the home position, here after a power cut too.'
-                     : 'Saved the home position.');
+          var msg = 'Saved the home position.';
+          if (r.boot && r.watched) msg = 'Saved: here after a power cut, and '
+                                       + 'checked daily against this view.';
+          else if (r.boot) msg = 'Saved the home position, here after a power '
+                               + 'cut too.';
+          else if (r.watched) msg = 'Saved, and checked daily against this view.';
+          say(msg);
         } else { handle(r); }
       });
     }, false);

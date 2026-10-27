@@ -74,7 +74,7 @@ class Controller:
                  notifier=None, kiosk=None,
                  mark_open_fn=None, mark_done_fn=None,
                  annotated=None, capture=None, settings=None,
-                 clock=None, wall=None):
+                 aim=None, clock=None, wall=None):
         self.cfg = cfg
         self.ptz = ptz
         # Panel-editable settings (may be None in tests / a bare install). The
@@ -93,6 +93,10 @@ class Controller:
         self.snapshot_fn = snapshot_fn or (lambda: "")
         self.notifier = notifier
         self.kiosk = kiosk
+        # Watches that the parked view still matches what somebody aimed at.
+        # Parked is the only honest moment to ask: anywhere else the camera is
+        # somewhere it was told to be.
+        self.aim = aim
         self.tracker = tracker
         self.announcer = announcer
         self.annotated = annotated
@@ -416,6 +420,44 @@ class Controller:
         # A window opened by the PIR while the camera stayed parked still has
         # to close, or the capture state would never be released.
         self._expire_idle_incident()
+        self._check_the_aim()
+
+    def _check_the_aim(self):
+        """Once a day, ask whether the view is still the view.
+
+        Only from parked, and only with the motors settled: anywhere else the
+        camera is somewhere it was deliberately sent, and a frame taken
+        mid-swing is a blur. Costs one snapshot a day and no motor seconds at
+        all -- which is the point, because the thing it is watching for is
+        exactly the thing the camera cannot report about itself.
+        """
+        if self.aim is None or self._incident is not None:
+            return
+        try:
+            if not self.aim.due():
+                return
+            if not self.ptz.settled():
+                return
+            frame = self.ptz.snapshot()
+        except Exception:
+            log.warning("could not take a frame for the aim check",
+                        exc_info=True)
+            return
+        reading = self.aim.check(frame)
+        if reading is None or not reading.drifted:
+            return
+        log.warning("the camera is not looking where it was aimed: "
+                    "%.0f px off (confidence %.1f)",
+                    reading.shift, reading.confidence)
+        if self.notifier is None:
+            return
+        try:
+            name = getattr(self.cfg, "site_name", "") or "surveillance"
+            self.notifier.send("%s: the camera has moved" % name,
+                               self.aim.message(reading), image=frame,
+                               tags="warning")
+        except Exception:
+            log.exception("could not report the camera's aim")
 
     def _expire_idle_incident(self):
         """Close a window nothing has refreshed for the quiet period.

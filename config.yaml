@@ -235,6 +235,12 @@ ptz:
   max_continuous_move_s: 10.0  # hard ceiling even if refreshes keep arriving
   preset_move_estimate_s: 3.0  # charged to the budget for a goto
 
+  # A calibration run drives both axes stop to stop, which is the longest
+  # move the camera makes. Charged in full, but never refused: it is longer
+  # than some sites' whole hourly allowance, and a person who has just
+  # confirmed a dialog is not the repetitive motion the budget exists to stop.
+  calibrate_estimate_s: 45.0
+
   # A calibration run drives both axes stop to stop, which is the longest move
   # the camera makes. Charged in full, but never refused: it is longer than
   # some sites' whole hourly allowance, and a person who has just confirmed a
@@ -262,6 +268,37 @@ ptz:
     timeout_s: 5.0
     stop_timeout_s: 3.0        # stops get a shorter timeout and more retries
     stop_retries: 5
+
+# Is the camera still looking where it was aimed?
+#
+# This dome reports no absolute position, so nothing in the software can tell
+# a correct view from a displaced one: the log says "at Home" because that is
+# the name it asked for, never what the lens saw. On 15 October 2026 a power
+# cut displaced every preset and the club filmed its own mount for twelve days
+# with every health check green. So once a day, from the parked position, the
+# view is compared against a reference picture -- taken automatically whenever
+# somebody presses Set Home. One snapshot a day, no motor movement at all.
+aim_watch:
+  enabled: true
+  every_hours: 24
+  # The check runs at the time of day the reference was taken, within this
+  # window, so a night reference is never compared against noon.
+  window_minutes: 90
+  # How far the view may move, in pixels of the 256-wide square the comparison
+  # runs on. 20 is about 8% of the frame.
+  shift_px: 20
+  # Below this the two pictures have no geometry in common at all -- a blocked
+  # lens, or a camera pointing somewhere else entirely. Measured: the same
+  # scene scores 65-250 however it is lit; the ceiling the club's camera ended
+  # up on scored 6.8.
+  min_confidence: 20
+  # A suspicious reading is looked at again after this long before anybody is
+  # told. Somebody standing in front of the lens looks exactly like a camera
+  # that has moved, for about a minute.
+  confirm_seconds: 120
+  # While the view stays wrong every check finds it wrong. One reminder a day
+  # keeps saying so without becoming noise that gets the topic muted.
+  cooldown_hours: 24
 
 # The PIR that already switches the floodlights, read as a dry contact.
 # Find the chip and line with:  gpiodetect  then  gpioinfo

@@ -370,10 +370,54 @@ Two things answer it, and they are both in the Manual tab:
   somebody express it twice is how the mount view happened.
 
 Neither helps if the camera slips while it is running, which it did once more
-on the evening of 27 October with the mains perfectly steady. The honest
-summary is that this class of camera cannot be trusted to know where it is,
-and anything that matters should be checked against a picture rather than
-against the camera's own account of itself.
+on the evening of 27 October with the mains perfectly steady. This class of
+camera cannot be trusted to know where it is, so the only account worth
+having is a picture.
+
+**`aimwatch.py` keeps that account.** Once a day, from the parked position
+and with the motors settled, it takes one snapshot and asks whether the view
+still matches a reference -- taken automatically whenever somebody presses
+Set Home, because saving the home position and saying "watch this" are the
+same act. It costs one frame a day and no motor movement at all, which
+matters: the alternative, a periodic calibration, drives both axes into their
+end stops on a schedule to fix a problem nobody has confirmed is there.
+
+It measures a *shift*, not a difference. Two pictures of the same place at
+noon and at midnight have almost no pixels in common; a difference score
+loose enough to survive that would be far too loose to notice a camera
+pointing at a ceiling. Phase correlation finds how far the whole picture has
+moved and divides the magnitude out of the spectrum, so what is left is
+alignment rather than contrast. Measured on real frames off the club camera:
+
+| | shift | confidence |
+|---|---|---|
+| two frames of the same aim, 45s apart | 0 | 238 |
+| the same aim, lit a quarter as brightly | 0 | 243 |
+| home against the view of its own mount | 33 | 7 |
+| home against the post-calibration aim | 56 | 9 |
+| home against a 2.4-second pan right | 30 | 7 |
+
+Anything still aimed where it was scores above 200; anything that is not
+scores under 10. The thresholds are not a matter of taste.
+
+Three things keep it from crying wolf, and one of them is the whole reason
+the module can be trusted at all:
+
+- **A suspicious reading is looked at again two minutes later**, not
+  tomorrow. Somebody standing in front of the lens and a camera that has
+  moved are the same picture for about a minute.
+- **The check runs at the time of day the reference was taken.** A night
+  reference is never compared against noon.
+- **It reminds once a day while the view stays wrong.** Saying it once is how
+  a thing gets forgotten; saying it every check is how an ntfy topic gets
+  muted.
+
+Two steps that looked careful did not survive measurement and were deleted:
+gradient magnitude instead of brightness, and subtracting the mean. Both left
+every number in the third significant figure. A third -- the Hann window --
+earned its place the hard way: without it the club's real 2.4-second pan came
+back as shift 0.0 with a confidence saying the view was unchanged, which is
+the exact failure the module exists to prevent.
 
 ### Capabilities, and being honest about them
 

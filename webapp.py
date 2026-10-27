@@ -1665,7 +1665,19 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             pass
         except Exception:
             log.warning("could not set the camera's boot position", exc_info=True)
-        return jsonify(ok=True, name=home, boot=booted)
+        # And this is now the view to watch for. Same act, same button: the
+        # person has just aimed the camera at what they want watched, and a
+        # reference that needs a second button is a reference nobody takes.
+        watched = False
+        aim = getattr(controller, "aim", None) if controller else None
+        if aim is not None and aim.enabled:
+            try:
+                aim.set_reference(ptz.snapshot())
+                watched = True
+            except Exception:
+                log.warning("could not take a reference picture of the new "
+                            "home position", exc_info=True)
+        return jsonify(ok=True, name=home, boot=booted, watched=watched)
 
     @app.route("/api/ptz/calibrate", methods=["POST"])
     @protected_manual

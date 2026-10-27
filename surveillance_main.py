@@ -29,6 +29,7 @@ import config
 import ptz as ptz_mod
 import recorder as recorder_mod
 import trigger as trigger_mod
+import aimwatch
 import kiosk as kiosk_mod
 import notify as notify_mod
 from alerts import AlertPolicy, ShadowLog
@@ -403,8 +404,18 @@ def main(argv=None):
         log.warning("kiosk.enabled is set but the host or the remote-admin "
                     "password is missing; the screen will not be woken")
 
+    # The camera cannot say where it is pointing, so the only way to know the
+    # view is still the view is to look at it. Reference beside settings.json,
+    # on the data disk: it has to survive a reinstall of the code.
+    aim = aimwatch.from_config(cfg, cfg.events_root.parent)
+    if aim is not None and aim.enabled:
+        log.info("the parked view will be checked against its reference "
+                 "every %.0fh%s", aim.every_s / 3600.0,
+                 "" if aim.has_reference
+                 else " (no reference yet -- press Set Home to take one)")
+
     controller = Controller(cfg, ptz, schedule, policy, shadow, notifier=pusher,
-                            kiosk=wall,
+                            kiosk=wall, aim=aim,
                             clip_fn=cut_clip, snapshot_fn=take_snapshot,
                             mark_open_fn=mark_incident_open,
                             mark_done_fn=mark_incident_done,
