@@ -85,7 +85,7 @@ class FoscamBackend(CameraBackend):
 
     CAPABILITIES = frozenset({
         Cap.PRESETS, Cap.ZOOM, Cap.SNAPSHOT, Cap.CLOCK, Cap.SPEED,
-        Cap.DIAGONAL,
+        Cap.DIAGONAL, Cap.CALIBRATE, Cap.BOOT_PRESET,
         # Deliberately absent: ABSOLUTE_POSITION. getPTZAbsolutePos,
         # getPTZCurrentPos and getZoomAbsolutePos all answer result=-3 on this
         # firmware, so there is no way to ask where the camera is pointing.
@@ -202,6 +202,22 @@ class FoscamBackend(CameraBackend):
         except CameraError:
             pass                    # not there yet, which is fine
         return self.call("ptzAddPresetPoint", name=name)
+
+    # --------------------------------------------------------- calibration
+    def calibrate(self):
+        """ptzReset: drive to the end stops and re-find the origin.
+
+        The camera moves for a while afterwards and takes no further orders
+        until it is done, which is why nothing here waits for it.
+        """
+        return self.call("ptzReset", timeout=max(self.timeout, 15.0))
+
+    def set_boot_preset(self, name):
+        return self.call("setPTZPrePointForSelfTest", name=name)
+
+    def boot_preset(self):
+        out = self.call("getPTZPrePointForSelfTest")
+        return str(out.get("name") or "")
 
     # ----------------------------------------------------------------- misc
     def set_speed(self, level):

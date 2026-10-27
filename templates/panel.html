@@ -275,6 +275,7 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
         </div>
         <div class="row">
           <button class="small" id="sweepnow" title="run one Left-Right-home cycle to check the aim">Sweep now</button>
+          <button class="small" id="calibrate" title="drive to the end stops and re-find the origin; every preset must then be saved again">Calibrate</button>
         </div>
         <h3>Presets</h3>
         <div class="row"><button class="wide" data-preset="{{ home }}">{{ home }}</button></div>
@@ -478,8 +479,32 @@ a.big:active { background:#2f6a53; border-color:#3f8a6c; }
     setHome.addEventListener('click', function (e) {
       e.preventDefault();
       post('/api/ptz/home/set', '', function (r) {
-        if (r && r.ok) say('Saved the home position.');
-        else handle(r);
+        if (r && r.ok) {
+          say(r.boot ? 'Saved the home position, here after a power cut too.'
+                     : 'Saved the home position.');
+        } else { handle(r); }
+      });
+    }, false);
+  }
+
+  /* Calibration throws every preset out of register, so it asks first. The
+     confirm is the whole safety mechanism: there is no undo, and the camera
+     comes back aimed at nothing in particular. */
+  var calibrate = document.getElementById('calibrate');
+  if (calibrate) {
+    calibrate.addEventListener('click', function (e) {
+      e.preventDefault();
+      if (!window.confirm('Calibrate the camera?\n\nIt drives to its end '
+            + 'stops to re-find its origin, which takes about a minute. '
+            + 'Home, Left and Right will all point somewhere else '
+            + 'afterwards and must be set again.')) return;
+      post('/api/ptz/calibrate', '', function (r) {
+        if (r && r.ok) {
+          say('Calibrating… then set Home, Left and Right again.');
+          aimUntil = (new Date()).getTime() + (r.seconds || 45) * 1000;
+          applyAim();
+          setTimeout(applyAim, (r.seconds || 45) * 1000 + 100);
+        } else { handle(r); }
       });
     }, false);
   }

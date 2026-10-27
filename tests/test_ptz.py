@@ -472,6 +472,74 @@ class TestDisabledIsQuiet(Base):
         self.assertEqual(p.failed_stops, 0)
 
 
+class TestCalibration(Base):
+    """Re-finding the origin from the end stops.
+
+    This camera has no absolute position sensor: it counts steps from an
+    origin chosen at power-up. A cut mid-move gives it a new origin and every
+    preset silently means something else -- the club's camera spent twelve
+    days aimed at its own mount, with the log reporting 'at Home' throughout,
+    because 'at Home' is the name it asked for and never what it saw.
+    """
+
+    def test_it_drives_to_the_stops(self):
+        p = self.ptz()
+        self.cam.clear()
+        p.calibrate()
+        self.assertIn("ptzReset", self.cam.calls)
+
+    def test_it_is_charged_to_the_budget(self):
+        """A stop-to-stop run on both axes is the longest move there is.
+        Leaving it uncharged would let a calibration launder a spent budget
+        into free motor time."""
+        p = self.ptz()
+        before = p.budget.spent("manual")
+        p.calibrate()
+        self.assertAlmostEqual(p.budget.spent("manual"),
+                               before + p.calibrate_estimate_s, places=3)
+
+    def test_a_spent_budget_does_not_block_it(self):
+        """A calibration is longer than some sites' entire hourly allowance,
+        so a budget check would make it unreachable on exactly the cameras
+        that move least. Essential, like coming home."""
+        p = self.ptz()
+        p.budget.record(p.budget.limits["manual"], source="manual")
+        self.cam.clear()
+        p.calibrate()
+        self.assertIn("ptzReset", self.cam.calls)
+
+    def test_an_ordinary_move_after_it_is_still_refused(self):
+        """Essential buys the calibration through, not the hour after it."""
+        p = self.ptz()
+        p.calibrate()
+        with self.assertRaises(BudgetExceeded):
+            p.goto_preset("Home", source="manual")
+
+    def test_the_camera_counts_as_moving_until_it_has_finished(self):
+        """settled() gates the detector, and this move takes a minute. Held
+        unsettled for the whole run, not just the settle time after an
+        ordinary stop -- a camera swinging to its end stops is motion blur,
+        not a scene."""
+        p = self.ptz()
+        p.calibrate()
+        self.assertFalse(p.settled())
+        # negative: the clock has to reach the end of the run before anything
+        # counts as still again
+        self.assertLess(p.since_last_move(), -p.calibrate_estimate_s + 1.0)
+
+    def test_a_camera_that_cannot_calibrate_is_not_a_crash(self):
+        p = self.ptz()
+        self.cam.fail_cmds.add("ptzReset")
+        with self.assertRaises(PTZError):
+            p.calibrate()
+
+    def test_the_boot_position_is_pushed_to_the_camera(self):
+        p = self.ptz()
+        self.cam.clear()
+        p.set_boot_preset("Home")
+        self.assertIn("setPTZPrePointForSelfTest", self.cam.calls)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

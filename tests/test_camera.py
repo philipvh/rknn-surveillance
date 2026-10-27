@@ -134,6 +134,39 @@ class TestFoscamProtocol(unittest.TestCase):
         self.assertIn("ptzMoveLeft", self.t.calls)
         self.assertIn("zoomIn", self.t.calls)
 
+    # ------------------------------------------------------- calibration
+    def test_calibration_drives_to_the_end_stops(self):
+        """The whole point: a position the hardware can find on its own,
+        rather than wherever it happened to stop when the power went."""
+        b = self.backend()
+        b.calibrate()
+        self.assertIn("ptzReset", self.t.calls)
+
+    def test_the_boot_position_round_trips(self):
+        b = self.backend()
+        b.set_boot_preset("Home")
+        self.assertIn("setPTZPrePointForSelfTest", self.t.calls)
+
+    def test_a_camera_that_refuses_to_calibrate_says_so(self):
+        """result=-3 is how this firmware says 'no such command'. It has to
+        surface, not pass for success -- a calibration that silently did
+        nothing would send someone re-aiming three presets for nothing."""
+        b = self.backend()
+        self.t.fail_cmds.add("ptzReset")
+        with self.assertRaises(CameraError):
+            b.calibrate()
+
+    def test_a_backend_without_the_routine_refuses_rather_than_pretends(self):
+        from camera.base import CameraBackend, NotSupported
+
+        class Bare(CameraBackend):
+            name = "bare"
+
+        with self.assertRaises(NotSupported):
+            Bare(StubCfg()).calibrate()
+        with self.assertRaises(NotSupported):
+            Bare(StubCfg()).set_boot_preset("Home")
+
     def test_stopping_a_zoom_stops_the_zoom_and_the_dome(self):
         b = self.backend()
         b.stop("zoom")

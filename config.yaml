@@ -235,6 +235,12 @@ ptz:
   max_continuous_move_s: 10.0  # hard ceiling even if refreshes keep arriving
   preset_move_estimate_s: 3.0  # charged to the budget for a goto
 
+  # A calibration run drives both axes stop to stop, which is the longest move
+  # the camera makes. Charged in full, but never refused: it is longer than
+  # some sites' whole hourly allowance, and a person who has just confirmed a
+  # dialog is not the repetitive motion the budget exists to stop.
+  calibrate_estimate_s: 45.0
+
   budget:
     # A rolling hour of motor-seconds, so repetition cannot grind the dome down
     # over a season. Every preset move is charged preset_move_estimate_s, which

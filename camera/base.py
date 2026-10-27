@@ -86,6 +86,8 @@ class Cap:
     DIAGONAL = "diagonal"            # topleft/bottomright and friends
     ABSOLUTE_POSITION = "absolute_position"
     PRESET_OVERWRITE = "preset_overwrite"   # saving an existing name re-aims it
+    CALIBRATE = "calibrate"          # can re-find its origin from the end stops
+    BOOT_PRESET = "boot_preset"      # can be told where to point after a power cut
 
 
 # --------------------------------------------------------------- transport
@@ -189,6 +191,30 @@ class CameraBackend:
 
     def set_speed(self, level):
         raise NotSupported("this camera has no speed control")
+
+    def calibrate(self):
+        """Re-find the origin by driving to the mechanical end stops.
+
+        A camera with no absolute position sensor counts steps from an origin
+        it decided on at power-up. Lose power mid-move and the new origin is
+        wherever the head happened to stop, which silently displaces every
+        preset by the same offset -- the club's camera spent twelve days
+        pointing at its own mount that way. This drives to the stops, which
+        are the one position the hardware can actually find, so the presets
+        saved afterwards mean the same thing after the next power cut.
+
+        Returns when the camera has accepted the command, not when the motors
+        have finished: like a preset move, the camera drives itself.
+        """
+        raise NotSupported("this camera has no calibration routine")
+
+    def set_boot_preset(self, name):
+        """Point here after a power-up, once the self-test is done."""
+        raise NotSupported("this camera cannot be told where to point at boot")
+
+    def boot_preset(self):
+        """The preset the camera returns to at boot, or '' for none."""
+        raise NotSupported("this camera cannot be told where to point at boot")
 
     def set_clock(self, utc, offset_seconds):
         """Set the camera's clock from a UTC instant and a local offset.

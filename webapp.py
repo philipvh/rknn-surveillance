@@ -47,6 +47,7 @@ import yaml
 
 import config as config_mod
 import controller as ctrl_mod
+from camera.base import NotSupported
 import vpn
 import wifi as wifi_mod
 from wifi import WiFi
@@ -1651,7 +1652,45 @@ def create_app(cfg, ptz=None, controller=None, schedule=None, health=None,
             return jsonify(ok=False, error=str(e)), 200
         if settings is not None:
             settings.mark_sweep_saved("home", True)
-        return jsonify(ok=True, name=home)
+        # Pin the same view as the camera's own post-boot position. Saving
+        # home and surviving a power cut are the same wish, and asking the
+        # person to express it twice is how the club's camera came back from
+        # an outage aimed at its own mount. Best effort: a camera that cannot
+        # be told this still has a home to return to under its own power.
+        booted = False
+        try:
+            ptz.set_boot_preset(home)
+            booted = True
+        except NotSupported:
+            pass
+        except Exception:
+            log.warning("could not set the camera's boot position", exc_info=True)
+        return jsonify(ok=True, name=home, boot=booted)
+
+    @app.route("/api/ptz/calibrate", methods=["POST"])
+    @protected_manual
+    def api_calibrate():
+        """Re-find the camera's origin from its mechanical end stops.
+
+        This camera counts steps from an origin it picks at power-up, so a cut
+        mid-move displaces every preset by the same offset and nothing in the
+        system can tell: the log still says 'at Home' because that is the name
+        it asked for, not what it saw. Driving to the stops gives the presets
+        saved afterwards a reference the hardware can find again by itself.
+
+        Deliberately manual, and deliberately blunt about the consequence: it
+        leaves every existing preset meaning the wrong thing, so it is only
+        ever pressed by somebody about to re-aim all three.
+        """
+        need_ptz()
+        _take_manual()          # no sweep may start while the head is driving
+        try:
+            ptz.calibrate(source="manual")
+        except NotSupported as e:
+            return jsonify(ok=False, error=str(e)), 200
+        except Exception as e:
+            return jsonify(ok=False, error=str(e)), 200
+        return jsonify(ok=True, seconds=int(ptz.calibrate_estimate_s))
 
     @app.route("/api/ptz/sweep/once", methods=["POST"])
     @protected_manual

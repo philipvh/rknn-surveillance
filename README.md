@@ -345,6 +345,36 @@ layer instead of a way to inherit it.
 quietly when the camera did not hear you is the worst thing a backend can do,
 because the layer above treats a clean return as proof and stops retrying.
 
+### Where the camera thinks it is pointing
+
+This dome reports no absolute position: it counts steps from an origin it
+decides on at power-up. So a power cut mid-move hands it a new origin, and
+every saved preset is silently displaced by the same offset. Nothing in the
+software can see it. The log still reads `incident closed ... at Home`,
+because "at Home" is the name it asked for, never what the lens saw.
+
+That is not hypothetical. An electrician cut the club's power on 15 October
+while the camera was sweeping; it came back with its presets offset, and for
+twelve days every return home parked it on a view of its own mount. The
+detections kept coming and the health checks stayed green throughout.
+
+Two things answer it, and they are both in the Manual tab:
+
+- **Calibrate** drives to the mechanical end stops, which are the one
+  position the hardware can find without being told. Presets saved after a
+  calibration survive a power cut, because the camera can get back to the
+  same origin by itself. It is blunt -- it leaves every existing preset
+  meaning the wrong thing -- so it confirms first and is never automatic.
+- **Set Home** now also pins that view as the camera's own post-boot
+  position. Saving home and surviving a power cut are one wish, and making
+  somebody express it twice is how the mount view happened.
+
+Neither helps if the camera slips while it is running, which it did once more
+on the evening of 27 October with the mains perfectly steady. The honest
+summary is that this class of camera cannot be trusted to know where it is,
+and anything that matters should be checked against a picture rather than
+against the camera's own account of itself.
+
 ### Capabilities, and being honest about them
 
 Cameras differ in ways callers care about. The shipped Foscam backend declares

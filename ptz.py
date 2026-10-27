@@ -190,6 +190,10 @@ class PTZ:
         self.watchdog_interval_s = float(self.p.get("watchdog_interval_s", 0.1))
         self.max_continuous_move_s = float(self.p.get("max_continuous_move_s", 10.0))
         self.preset_estimate_s = float(self.p.get("preset_move_estimate_s", 3.0))
+        # A calibration run is the longest move the camera makes: both axes,
+        # stop to stop. Charged in full so a spent budget is not hidden by it.
+        self.calibrate_estimate_s = float(
+            self.p.get("calibrate_estimate_s", 45.0))
 
         b = self.p.get("budget", {}) or {}
         self.budget = MotorBudget(
@@ -531,6 +535,39 @@ class PTZ:
 
     def go_home(self, source="auto"):
         return self.goto_preset(self.p.get("home_preset", "Home"), source=source)
+
+    # ------------------------------------------------------------ calibration
+    def calibrate(self, source="manual"):
+        """Send the camera to its end stops to re-find the origin.
+
+        Essential, like coming home, and for the same reason: it is longer
+        than some sites' whole hourly allowance, so a budget check would make
+        it unreachable exactly on the cameras that move least -- and a person
+        who has just confirmed a dialog is not the repetitive motion the
+        budget exists to stop. Still charged in full, so it shows in the spend
+        and the ordinary moves after it are refused normally.
+
+        Never automatic: it throws every saved preset out of register, so it
+        only ever happens because somebody pressed the button and is standing
+        by to re-aim.
+        """
+        self.budget.check(self.calibrate_estimate_s, source=source,
+                          essential=True)
+        self._cam().calibrate()
+        self.budget.record(self.calibrate_estimate_s, source=source)
+        with self._lock:
+            # It is driving itself to the stops; settled() must stay false for
+            # the whole run or the detector will read motion blur as a scene.
+            self.last_stopped_at = self._clock() + self.calibrate_estimate_s
+        log.warning("calibrating the camera (%s); every preset must be "
+                    "saved again afterwards", source)
+
+    def set_boot_preset(self, name):
+        """Where the camera should point after a power cut."""
+        return self._cam().set_boot_preset(name)
+
+    def boot_preset(self):
+        return self._cam().boot_preset()
 
     # ----------------------------------------------------------------- misc
     def set_speed(self, level):

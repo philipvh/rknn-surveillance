@@ -60,10 +60,13 @@ OK = b"<CGI_Result><result>0</result></CGI_Result>"
 class FakeCamera:
     def __init__(self):
         self.calls = []
+        self.fail_cmds = set()      # a camera firmware that lacks a command
 
     def get(self, url, params, timeout):
         cmd = params.get("cmd")
         self.calls.append(cmd)
+        if cmd in self.fail_cmds:
+            return b"<CGI_Result><result>-3</result></CGI_Result>"
         if cmd == "snapPicture2":
             return b"\xff\xd8\xff\xe0fake-jpeg-body"
         return OK
@@ -1224,9 +1227,12 @@ class _StubController:
     def __init__(self, ready=True):
         self.ready = ready
         self.called = 0
+        self.manual = False
     def sweep_once(self):
         self.called += 1
         return self.ready
+    def on_manual(self, on):
+        self.manual = bool(on)
 
 
 class TestUsageMeter(Base):
@@ -1436,7 +1442,8 @@ class TestManualControlCanBeHeldBack(Base):
 
     MANUAL = ("/api/ptz/move", "/api/ptz/zoom", "/api/ptz/stop",
               "/api/ptz/preset", "/api/ptz/sweep", "/api/ptz/sweep/set",
-              "/api/ptz/sweep/once", "/api/ptz/home/set")
+              "/api/ptz/sweep/once", "/api/ptz/home/set",
+              "/api/ptz/calibrate")
 
     def setUp(self):
         super().setUp()
@@ -1907,6 +1914,51 @@ class TestSweepNow(Base):
         self.assertTrue(self.store.sweep_home_saved)
         s = self.c.get("/api/status", headers=self.auth()).get_json()
         self.assertTrue(s["sweep"]["home_saved"])
+
+    def test_set_home_also_pins_the_position_for_a_power_cut(self):
+        """Saving home and surviving a power cut are one wish, not two. The
+        club's camera came back from an outage aimed at its own mount because
+        the camera had no post-boot position of its own."""
+        r = self.c.post("/api/ptz/home/set", headers=self.auth())
+        self.assertTrue(r.get_json()["boot"])
+        self.assertIn("setPTZPrePointForSelfTest", self.cam.calls)
+
+    def test_a_camera_that_cannot_be_pinned_still_saves_home(self):
+        """Every other camera in the world is allowed to lack this."""
+        from camera.base import NotSupported
+
+        def refuse(name):
+            raise NotSupported("nope")
+
+        self.ptz.set_boot_preset = refuse
+        r = self.c.post("/api/ptz/home/set", headers=self.auth())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertFalse(r.get_json()["boot"])
+
+    def test_calibrate_drives_to_the_end_stops(self):
+        r = self.c.post("/api/ptz/calibrate", headers=self.auth())
+        self.assertTrue(r.get_json()["ok"])
+        self.assertIn("ptzReset", self.cam.calls)
+
+    def test_calibrate_takes_the_camera_off_automatic_first(self):
+        """The head is driving itself for a minute. A sweep starting on top
+        of that is two things fighting for one motor."""
+        self.c.post("/api/ptz/calibrate", headers=self.auth())
+        self.assertTrue(self.ctrl.manual)
+
+    def test_a_camera_that_refuses_to_calibrate_is_reported_not_swallowed(self):
+        """result=-3 means the firmware has no such routine. Saying 'ok' to
+        that would send somebody re-aiming three presets for nothing."""
+        self.cam.fail_cmds.add("ptzReset")
+        r = self.c.post("/api/ptz/calibrate", headers=self.auth())
+        self.assertFalse(r.get_json()["ok"])
+        self.assertTrue(r.get_json()["error"])
+
+    def test_the_panel_offers_the_button_and_asks_first(self):
+        body = self.c.get("/", headers=self.auth()).data.decode()
+        self.assertIn('id="calibrate"', body)
+        self.assertIn("/api/ptz/calibrate", body)
+        self.assertIn("window.confirm", body)
 
     def test_sweep_now_reports_when_endpoints_missing(self):
         self.ctrl.ready = False
